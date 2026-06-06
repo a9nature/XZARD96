@@ -1,22 +1,5 @@
 --[[
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║  SHERLOCK APEX V94 ULTRA - OPTIMIZED EDITION                 ║
-    ║  Versão Melhorada com Fixes de Memory Leak                   ║
-    ║  e Arquitetura Modular                                       ║
-    ╚═══════════════════════════════════════════════════════════════╝
-    
-    MELHORIAS IMPLEMENTADAS:
-    ✓ Memory leak fixes no ITEM ESP e BRING ITEMS
-    ✓ Cleanup automático de objetos destruídos
-    ✓ Fallbacks para funções de exploit indisponíveis
-    ✓ Arquitetura modular com classe ApexScript
-    ✓ Sistema de eventos melhorado
-    ✓ Performance otimizada com cache
-    ✓ Melhor detecção de team
-    ✓ UI mais responsiva com tween suave
-    ✓ BRING METALS e BRING ITEMS - Loop infinito
-    ✓ PHYSICS HABILITADA - Itens caem naturalmente após trazer (CORRIGIDO)
-    ✓ Itens respawnam automaticamente para repetição infinita
+   MELHORIAS IMPLEMENTADAS:
 ]]
 
 -- ====== SERVIÇOS E VARIÁVEIS GLOBAIS ======
@@ -37,6 +20,7 @@ function ApexScript.new()
         bringItemsSpeed = 1.2,
         espUpdateSpeed = 2,
         playerEspUpdateSpeed = 0.1,
+        maxCacheSize = 10,
     }
     
     -- Estados
@@ -48,9 +32,20 @@ function ApexScript.new()
         infJump = false,
         itemEsp = false,
         playerEsp = false,
+        killAura = false,
     }
     
-    -- Rastreamento - apenas para limpeza de ESP
+    -- Variáveis de Combate e Movimentação
+    self.KillAuraRange = 500
+    self.OriginalGravity = workspace.Gravity
+    self.FlySpeedMultiplier = 5
+    self.CustomSpeedValue = 200 -- Velocidade vetorial equivalente ao antigo 995 real do jogo
+    
+    -- Caches Históricos Rotativos para evitar o efeito ioiô
+    self.CacheMetals = {}
+    self.CacheItems = {}
+    
+    -- Rastreamento - apenas para limpeza de ESP e Threads
     self.Tracking = {
         espLabels = setmetatable({}, {__mode = "k"}),
         playerHighlights = setmetatable({}, {__mode = "k"}),
@@ -58,14 +53,10 @@ function ApexScript.new()
         activeThreads = {},
     }
     
-    -- Dados salvos
-    self.OriginalGravity = workspace.Gravity
-    self.FlySpeedMultiplier = 5
-    
-    -- Configurações de itens - LISTA SIMPLES E DIRETA
+    -- Configurações de itens
     self.MetaisParaTrazer = {"Metal", "ScrapMetal", "ESP Metal"}
     self.ItensParaTrazer = {"BrokenCrate", "BrokenCrate2", "Plank"}
-    self.ArmasSuportadas = {"Machete", "Machado", "Arpão", "Machete ", "Machado ", "Arpão "}
+    self.ArmasSuportadas = {"Machete", "Machado", "Arpão", "Machete ", "Machado ", "Arpão ", "Sword", "Espada"}
     self.LootKeywords = {"wood", "plastic", "scrap", "metal", "barrel", "crate", "box", "plank", "bolt", "leaf", "chest"}
     
     -- UI
@@ -92,6 +83,16 @@ function ApexScript:IsTeammate(player)
     if not player then return false end
     if not LP.Team then return false end
     return player.Team == LP.Team
+end
+
+-- Gerenciador do Cache Histórico Rotativo (Fila FIFO de 10 objetos)
+function ApexScript:ManageCache(cacheTable, object)
+    if table.find(cacheTable, object) then return true end
+    if #cacheTable >= self.Config.maxCacheSize then
+        table.remove(cacheTable, 1)
+    end
+    table.insert(cacheTable, object)
+    return false
 end
 
 -- ====== FUNÇÕES DE EXPLOIT (COM FALLBACKS) ======
@@ -131,7 +132,7 @@ function ApexScript:BuildUI()
     Main.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
     Main.BorderSizePixel = 0
     Main.Position = UDim2.new(0.5, -130, 0.5, -200)
-    Main.Size = UDim2.new(0, 260, 0, 440)
+    Main.Size = UDim2.new(0, 260, 0, 460) -- Aumentado levemente para caber a Aura e o Slider perfeitamente
     Main.Active = true
     Main.Draggable = true
     
@@ -148,10 +149,10 @@ function ApexScript:BuildUI()
     Title.Parent = Main
     Title.Size = UDim2.new(0.85, 0, 0, 50)
     Title.Position = UDim2.new(0, 10, 0, 5)
-    Title.Text = "SHERLOCK APEX V94"
+    Title.Text = "SHERLOCK APEX V94 ULTRA"
     Title.TextColor3 = Color3.new(1, 1, 1)
     Title.Font = Enum.Font.GothamBlack
-    Title.TextSize = 18
+    Title.TextSize = 16
     Title.BackgroundTransparency = 1
     
     local MinimizeBtn = Instance.new("TextButton")
@@ -175,6 +176,7 @@ function ApexScript:BuildUI()
     Content.Size = UDim2.new(1, -30, 1, -75)
     Content.BackgroundTransparency = 1
     Content.ScrollBarThickness = 0
+    Content.CanvasSize = UDim2.new(0, 0, 0, 600)
     
     local UIList = Instance.new("UIListLayout")
     UIList.Parent = Content
@@ -229,45 +231,106 @@ function ApexScript:MakeButton(text, callback)
     return btn
 end
 
+function ApexScript:BuildSlider()
+    local sliderContainer = Instance.new("Frame")
+    sliderContainer.Size = UDim2.new(1, 0, 0, 65)
+    sliderContainer.BackgroundTransparency = 1
+    sliderContainer.Parent = self.UI.Content
+
+    local sliderLabel = Instance.new("TextLabel")
+    sliderLabel.Parent = sliderContainer
+    sliderLabel.Size = UDim2.new(1, 0, 0, 20)
+    sliderLabel.BackgroundTransparency = 1
+    sliderLabel.Text = "AURA RANGE: 500m"
+    sliderLabel.TextColor3 = Color3.new(1, 1, 1)
+    sliderLabel.Font = Enum.Font.GothamBold
+    sliderLabel.TextSize = 10
+
+    local sliderBg = Instance.new("Frame")
+    sliderBg.Parent = sliderContainer
+    sliderBg.Position = UDim2.new(0, 0, 0, 25)
+    sliderBg.Size = UDim2.new(1, 0, 0, 15)
+    sliderBg.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    sliderBg.BorderSizePixel = 0
+    local sliderCorner = Instance.new("UICorner")
+    sliderCorner.CornerRadius = UDim.new(0, 8)
+    sliderCorner.Parent = sliderBg
+
+    local sliderFill = Instance.new("Frame")
+    sliderFill.Parent = sliderBg
+    sliderFill.Size = UDim2.new(1, 0, 1, 0)
+    sliderFill.BackgroundColor3 = Color3.fromRGB(0, 255, 120)
+    sliderFill.BorderSizePixel = 0
+    local fillCorner = Instance.new("UICorner")
+    fillCorner.CornerRadius = UDim.new(0, 8)
+    fillCorner.Parent = sliderFill
+
+    local isSliding = false
+    local function updateSlider(input)
+        local mousePos = input.Position.X
+        local sliderPos = sliderBg.AbsolutePosition.X
+        local sliderSize = sliderBg.AbsoluteSize.X
+        local percentage = math.clamp((mousePos - sliderPos) / sliderSize, 0, 1)
+        local value = math.round(1 + (percentage * 499)) 
+        
+        sliderFill.Size = UDim2.new(percentage, 0, 1, 0)
+        sliderLabel.Text = "AURA RANGE: " .. value .. "m"
+        self.KillAuraRange = value
+    end
+
+    sliderBg.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            isSliding = true
+            updateSlider(input)
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if isSliding and input.UserInputType == Enum.UserInputType.MouseMovement then
+            updateSlider(input)
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            isSliding = false
+        end
+    end)
+end
+
 -- ====== FEATURES ======
 
--- 1. BRING METALS - COM PHYSICS CORRIGIDO
+-- 1. BRING METALS - COM FÍSICA ATIVA (ACORDANDO O CORPO)
 function ApexScript:ToggleBringMetals(btn)
     self.States.bringMetals = not self.States.bringMetals
     btn.Text = self.States.bringMetals and "BRING METALS: ACTIVE" or "BRING METALS: OFF"
     
+    if not self.States.bringMetals then
+        table.clear(self.CacheMetals)
+    end
+    
     if self.States.bringMetals then
         local thread = task.spawn(function()
-            -- Criar set para lookup O(1) - fora do loop
             local metalSet = {}
-            for _, name in pairs(self.MetaisParaTrazer) do
-                metalSet[name] = true
-            end
+            for _, name in pairs(self.MetaisParaTrazer) do metalSet[name] = true end
             
             while self.States.bringMetals do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
-                        -- Buscar todos os descendentes
                         for _, v in pairs(workspace:GetDescendants()) do
-                            -- Verificações rápidas em ordem
                             if not (v:IsA("BasePart") or v:IsA("Model")) then continue end
                             if v:IsDescendantOf(LP.Character) then continue end
                             if not v.Parent then continue end
                             
-                            -- Verificar nome (lookup O(1) em set)
                             if metalSet[v.Name] then
-                                self:MoveObject(v, meuCFrame)
-                                
-                                -- Liberar gravidade IMEDIATAMENTE em uma thread separada
-                                task.delay(0.1, function()
-                                    self:EnablePhysics(v)
-                                end)
+                                local jaTrazido = table.find(self.CacheMetals, v)
+                                if not jaTrazido then
+                                    self:ManageCache(self.CacheMetals, v)
+                                    self:MoveObject(v, meuCFrame)
+                                    self:EnablePhysics(v) -- Força o item a cair de verdade
+                                end
                             end
                         end
-                        
-                        -- Garbage collection periódico (leve)
                         collectgarbage("step", 1)
                     end
                 end)
@@ -278,43 +341,39 @@ function ApexScript:ToggleBringMetals(btn)
     end
 end
 
--- 2. BRING ITEMS - COM PHYSICS CORRIGIDO
+-- 2. BRING ITEMS - COM FÍSICA ATIVA
 function ApexScript:ToggleBringItems(btn)
     self.States.bringItems = not self.States.bringItems
     btn.Text = self.States.bringItems and "BRING ITEMS: ACTIVE" or "BRING ITEMS: OFF"
     
+    if not self.States.bringItems then
+        table.clear(self.CacheItems)
+    end
+    
     if self.States.bringItems then
         local thread = task.spawn(function()
-            -- Criar set para lookup O(1) - fora do loop
             local itemSet = {}
-            for _, name in pairs(self.ItensParaTrazer) do
-                itemSet[name] = true
-            end
+            for _, name in pairs(self.ItensParaTrazer) do itemSet[name] = true end
             
             while self.States.bringItems do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
-                        -- Buscar todos os descendentes
                         for _, v in pairs(workspace:GetDescendants()) do
-                            -- Verificações rápidas em ordem
                             if not (v:IsA("BasePart") or v:IsA("Model")) then continue end
                             if v:IsDescendantOf(LP.Character) then continue end
                             if not v.Parent then continue end
                             
-                            -- Verificar nome (lookup O(1) em set)
                             if itemSet[v.Name] then
-                                self:MoveObject(v, meuCFrame)
-                                
-                                -- Liberar gravidade IMEDIATAMENTE em uma thread separada
-                                task.delay(0.1, function()
-                                    self:EnablePhysics(v)
-                                end)
+                                local jaTrazido = table.find(self.CacheItems, v)
+                                if not jaTrazido then
+                                    self:ManageCache(self.CacheItems, v)
+                                    self:MoveObject(v, meuCFrame)
+                                    self:EnablePhysics(v) -- Força o item a cair de verdade
+                                end
                             end
                         end
-                        
-                        -- Garbage collection periódico (leve)
                         collectgarbage("step", 1)
                     end
                 end)
@@ -325,54 +384,41 @@ function ApexScript:ToggleBringItems(btn)
     end
 end
 
--- Função auxiliar para mover objetos (IMOBILIZA)
 function ApexScript:MoveObject(obj, targetCFrame)
     if obj:IsA("Model") then
-        -- Imobilizar todas as partes
         for _, part in pairs(obj:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Anchored = true
                 part.CanCollide = false
-                part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0) -- Zero massa/atrito
+                part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             end
         end
-        
-        -- Mover
-        if obj.PrimaryPart then
-            obj:SetPrimaryPartCFrame(targetCFrame)
-        else
-            obj:PivotTo(targetCFrame)
+        if obj.PrimaryPart then obj:SetPrimaryPartCFrame(targetCFrame) else obj:PivotTo(targetCFrame) end
+    elseif obj:IsA("BasePart") then
+        obj.Anchored = true; obj.CanCollide = false
+        obj.AssemblyLinearVelocity = Vector3.new(0, 0, 0); obj.CFrame = targetCFrame
+    end
+end
+
+-- FIX DE FÍSICA DEFINITIVO: Desancora e aplica micro-impulso vetorial vertical para baixo
+function ApexScript:EnablePhysics(obj)
+    local microImpulso = Vector3.new(0, -5, 0) -- Acorda a Network Ownership do motor físico do Roblox
+    if obj:IsA("Model") then
+        for _, part in pairs(obj:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Anchored = false
+                part.CanCollide = true
+                part.AssemblyLinearVelocity = microImpulso
+            end
         end
     elseif obj:IsA("BasePart") then
-        obj.Anchored = true
-        obj.CanCollide = false
-        obj.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0) -- Zero massa/atrito
-        obj.CFrame = targetCFrame
+        obj.Anchored = false
+        obj.CanCollide = true
+        obj.AssemblyLinearVelocity = microImpulso
     end
 end
 
--- Função para ATIVAR physics (deixar cair) - CORRIGIDA
-function ApexScript:EnablePhysics(obj)
-    if obj and obj.Parent then
-        if obj:IsA("Model") then
-            for _, part in pairs(obj:GetDescendants()) do
-                if part:IsA("BasePart") and part.Parent then
-                    part.Anchored = false
-                    part.CanCollide = true
-                    part.CustomPhysicalProperties = nil -- Restaurar propriedades padrão
-                    part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                end
-            end
-        elseif obj:IsA("BasePart") then
-            obj.Anchored = false
-            obj.CanCollide = true
-            obj.CustomPhysicalProperties = nil -- Restaurar propriedades padrão
-            obj.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        end
-    end
-end
-
--- 3. SPEED HACK
+-- 3. SPEED HACK VETORIAL SEGURO (Bypass Anti-Cheat)
 function ApexScript:ToggleSpeedHack(btn)
     self.States.speedHack = not self.States.speedHack
     btn.Text = self.States.speedHack and "SPEED: 5X ACTIVE" or "SPEED HACK: OFF"
@@ -381,19 +427,23 @@ function ApexScript:ToggleSpeedHack(btn)
         while self.States.speedHack do
             self:SafeCall(function()
                 if self:IsValidCharacter(LP.Character) then
-                    LP.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = 995
+                    local hum = LP.Character:FindFirstChildOfClass("Humanoid")
+                    local root = LP.Character.HumanoidRootPart
+                    local direcaoMove = hum.MoveDirection
+                    
+                    if direcaoMove.Magnitude > 0 then
+                        -- Aplica velocidade diretamente na física linear, mantendo o WalkSpeed real intocado (Bypass)
+                        root.AssemblyLinearVelocity = Vector3.new(direcaoMove.X * self.CustomSpeedValue, root.AssemblyLinearVelocity.Y, direcaoMove.Z * self.CustomSpeedValue)
+                    end
                 end
             end)
-            task.wait(0.1)
-        end
-        if self:IsValidCharacter(LP.Character) then
-            LP.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = 16
+            task.wait(0.01)
         end
     end)
     table.insert(self.Tracking.activeThreads, thread)
 end
 
--- 4. FLY COM SPEED HACK INTEGRADO
+-- 4. FLY COM VELOCIDADE VETORIAL INTEGRADA
 function ApexScript:ToggleFly(btn)
     self.States.fly = not self.States.fly
     btn.Text = self.States.fly and "VOAR: ACTIVE" or "VOAR: OFF"
@@ -414,12 +464,11 @@ function ApexScript:ToggleFly(btn)
                 while self.States.fly do
                     self:SafeCall(function()
                         workspace.Gravity = 0
-                        hum.WalkSpeed = 995
-                        
                         if root and hum then
                             local moveDirection = hum.MoveDirection
                             if moveDirection.Magnitude > 0 then
-                                local flyVelocity = moveDirection * (hum.WalkSpeed * self.FlySpeedMultiplier)
+                                -- Ganho sônico impulsionado inteiramente por força linear vetorial
+                                local flyVelocity = moveDirection * (self.CustomSpeedValue * self.FlySpeedMultiplier)
                                 root.AssemblyLinearVelocity = Vector3.new(flyVelocity.X, 0, flyVelocity.Z)
                             else
                                 root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -433,9 +482,6 @@ function ApexScript:ToggleFly(btn)
         table.insert(self.Tracking.activeThreads, thread)
     else
         workspace.Gravity = self.OriginalGravity
-        if self:IsValidCharacter(LP.Character) then
-            LP.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = 16
-        end
     end
 end
 
@@ -453,7 +499,93 @@ function ApexScript:InitializeInfiniteJump()
     end)
 end
 
--- 6. INSTANT INTERACT
+-- 6. KILL AURA INTEGRADA POO (MANTIDA E ADAPTADA DA SUA BASE V94)
+local function AutoEquipWeapon(self)
+    if not LP.Character then return nil end
+    local ferramentaAtual = LP.Character:FindFirstChildOfClass("Tool")
+    if ferramentaAtual then
+        for _, nomeArma in pairs(self.ArmasSuportadas) do
+            if string.find(ferramentaAtual.Name:lower(), nomeArma:lower()) then return ferramentaAtual end
+        end
+    end
+    local backpack = LP:FindFirstChild("Backpack")
+    if backpack then
+        for _, item in pairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                for _, nomeArma in pairs(self.ArmasSuportadas) do
+                    if string.find(item.Name:lower(), nomeArma:lower()) then
+                        item.Parent = LP.Character
+                        task.wait(0.05)
+                        return item
+                    end
+                end
+            end
+        end
+    end
+    return LP.Character:FindFirstChildOfClass("Tool")
+end
+
+local function ClickTarget(part)
+    local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
+    if onScreen then
+        local exploit = game:GetService("VirtualUser") or VirtualUser
+        if exploit then
+            exploit:CaptureController()
+            exploit:Button1Down(Vector2.new(screenPos.X, screenPos.Y), Camera.CFrame)
+            exploit:Button1Up(Vector2.new(screenPos.X, screenPos.Y), Camera.CFrame)
+        end
+    end
+end
+
+function ApexScript:ToggleKillAura(btn)
+    self.States.killAura = not self.States.killAura
+    btn.Text = self.States.killAura and "KILL AURA: ACTIVE" or "KILL AURA: OFF"
+    
+    if self.States.killAura then
+        local thread = task.spawn(function()
+            while self.States.killAura do
+                if self:IsValidCharacter(LP.Character) then
+                    local playerPos = LP.Character.HumanoidRootPart.Position
+                    
+                    for _, v in pairs(workspace:GetDescendants()) do
+                        if v:IsA("Model") and v ~= LP.Character then
+                            local targetPart = v:FindFirstChild("HumanoidRootPart") or v:FindFirstChild("Hitbox") or v:FindFirstChild("Head") or v.PrimaryPart
+                            
+                            if targetPart and targetPart:IsA("BasePart") then
+                                local distance = (playerPos - targetPart.Position).Magnitude
+                                
+                                if distance <= self.KillAuraRange then
+                                    local targetPlayer = Players:GetPlayerFromCharacter(v)
+                                    if not (targetPlayer and targetPlayer.Team == LP.Team and LP.Team ~= nil) then
+                                        
+                                        local tool = AutoEquipWeapon(self)
+                                        if tool then tool:Activate() end
+                                        
+                                        ClickTarget(targetPart)
+                                        
+                                        if tool and tool:FindFirstChild("Handle") then
+                                            firetouchinterest(targetPart, tool.Handle, 0)
+                                            firetouchinterest(targetPart, tool.Handle, 1)
+                                        end
+                                        
+                                        local hum = v:FindFirstChildOfClass("Humanoid")
+                                        if hum and hum.Health > 0 then
+                                            hum:TakeDamage(hum.MaxHealth)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                task.wait(0.05)
+            end
+        end)
+        table.insert(self.Tracking.activeThreads, thread)
+    end
+end
+
+-- 7. INSTANT INTERACT
 function ApexScript:InstantInteract()
     local exploit = self:GetExploitFunctions()
     if exploit.getgc then
@@ -468,17 +600,13 @@ function ApexScript:InstantInteract()
     return false
 end
 
--- 7. ITEM ESP
+-- 8. ITEM ESP
 function ApexScript:ToggleItemEsp(btn)
     self.States.itemEsp = not self.States.itemEsp
     btn.Text = self.States.itemEsp and "ITEM ESP: ACTIVE" or "ITEM ESP: OFF"
     
     if not self.States.itemEsp then
-        for _, label in pairs(self.Tracking.espLabels) do
-            if label and label.Parent then
-                label:Destroy()
-            end
-        end
+        for _, label in pairs(self.Tracking.espLabels) do if label and label.Parent then label:Destroy() end end
         self.Tracking.espLabels = setmetatable({}, {__mode = "k"})
     else
         local thread = task.spawn(function()
@@ -490,26 +618,16 @@ function ApexScript:ToggleItemEsp(btn)
                             local isLoot = false
                             
                             for _, key in pairs(self.LootKeywords) do
-                                if nameLower:find(key) then
-                                    isLoot = true
-                                    break
-                                end
+                                if nameLower:find(key) then isLoot = true; break end
                             end
                             
                             if isLoot and v.Name ~= "Hitbox" and v.Name ~= "WoodenFloor" and not self.Tracking.espLabels[v] then
                                 local bg = Instance.new("BillboardGui", v)
-                                bg.Name = "SherlockLabel"
-                                bg.Size = UDim2.new(0, 120, 0, 50)
-                                bg.AlwaysOnTop = true
+                                bg.Name = "SherlockLabel"; bg.Size = UDim2.new(0, 120, 0, 50); bg.AlwaysOnTop = true
                                 
                                 local tl = Instance.new("TextLabel", bg)
-                                tl.Size = UDim2.new(1, 0, 1, 0)
-                                tl.BackgroundTransparency = 1
-                                tl.TextColor3 = Color3.new(0, 1, 1)
-                                tl.Text = "[ " .. v.Name .. " ]"
-                                tl.Font = Enum.Font.GothamBold
-                                tl.TextSize = 11
-                                tl.TextStrokeTransparency = 0.5
+                                tl.Size = UDim2.new(1, 0, 1, 0); tl.BackgroundTransparency = 1; tl.TextColor3 = Color3.new(0, 1, 1)
+                                tl.Text = "[ " .. v.Name .. " ]"; tl.Font = Enum.Font.GothamBold; tl.TextSize = 11; tl.TextStrokeTransparency = 0.5
                                 
                                 self.Tracking.espLabels[v] = bg
                             end
@@ -523,19 +641,15 @@ function ApexScript:ToggleItemEsp(btn)
     end
 end
 
--- 8. PLAYER ESP
+-- 9. PLAYER ESP
 function ApexScript:TogglePlayerEsp(btn)
     self.States.playerEsp = not self.States.playerEsp
     btn.Text = self.States.playerEsp and "PLAYER ESP: ACTIVE" or "PLAYER ESP: OFF"
     
     if not self.States.playerEsp then
         for _, p in pairs(Players:GetPlayers()) do
-            if p.Character and p.Character:FindFirstChild("PlayerHighlight") then
-                p.Character.PlayerHighlight:Destroy()
-            end
-            if self.Tracking.playerLabels[p] and self.Tracking.playerLabels[p].Parent then
-                self.Tracking.playerLabels[p]:Destroy()
-            end
+            if p.Character and p.Character:FindFirstChild("PlayerHighlight") then p.Character.PlayerHighlight:Destroy() end
+            if self.Tracking.playerLabels[p] and self.Tracking.playerLabels[p].Parent then self.Tracking.playerLabels[p]:Destroy() end
         end
         self.Tracking.playerHighlights = setmetatable({}, {__mode = "k"})
         self.Tracking.playerLabels = setmetatable({}, {__mode = "k"})
@@ -546,26 +660,16 @@ function ApexScript:TogglePlayerEsp(btn)
                     for _, p in pairs(Players:GetPlayers()) do
                         if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
                             local char = p.Character
-                            
                             local hl = char:FindFirstChild("PlayerHighlight") or Instance.new("Highlight", char)
-                            hl.Name = "PlayerHighlight"
-                            hl.FillColor = Color3.new(0.5, 0, 1)
-                            hl.OutlineColor = Color3.new(1, 1, 1)
+                            hl.Name = "PlayerHighlight"; hl.FillColor = Color3.new(0.5, 0, 1); hl.OutlineColor = Color3.new(1, 1, 1)
                             
                             if not char.HumanoidRootPart:FindFirstChild("PlayerLabel") then
                                 local b = Instance.new("BillboardGui", char.HumanoidRootPart)
-                                b.Name = "PlayerLabel"
-                                b.Size = UDim2.new(0, 150, 0, 50)
-                                b.AlwaysOnTop = true
-                                b.ExtentsOffset = Vector3.new(0, 3, 0)
+                                b.Name = "PlayerLabel"; b.Size = UDim2.new(0, 150, 0, 50); b.AlwaysOnTop = true; b.ExtentsOffset = Vector3.new(0, 3, 0)
                                 
                                 local t = Instance.new("TextLabel", b)
-                                t.Size = UDim2.new(1, 0, 1, 0)
-                                t.BackgroundTransparency = 1
-                                t.TextColor3 = Color3.new(1, 1, 1)
-                                t.Font = Enum.Font.GothamBold
-                                t.TextSize = 12
-                                t.TextStrokeTransparency = 0
+                                t.Size = UDim2.new(1, 0, 1, 0); t.BackgroundTransparency = 1; t.TextColor3 = Color3.new(1, 1, 1)
+                                t.Font = Enum.Font.GothamBold; t.TextSize = 12; t.TextStrokeTransparency = 0
                                 
                                 task.spawn(function()
                                     while char:FindFirstChild("HumanoidRootPart") and self.States.playerEsp and p.Parent do
@@ -575,11 +679,8 @@ function ApexScript:TogglePlayerEsp(btn)
                                         end
                                         task.wait(self.Config.playerEspUpdateSpeed)
                                     end
-                                    if b and b.Parent then
-                                        b:Destroy()
-                                    end
+                                    if b and b.Parent then b:Destroy() end
                                 end)
-                                
                                 self.Tracking.playerLabels[p] = b
                             end
                         end
@@ -600,30 +701,20 @@ function ApexScript:Cleanup()
     self.States.fly = false
     self.States.itemEsp = false
     self.States.playerEsp = false
+    self.States.killAura = false
     
-    for _, thread in pairs(self.Tracking.activeThreads) do
-        task.cancel(thread)
-    end
+    for _, thread in pairs(self.Tracking.activeThreads) do pcall(function() task.cancel(thread) end) end
     self.Tracking.activeThreads = {}
     
     workspace.Gravity = self.OriginalGravity
     
-    if self:IsValidCharacter(LP.Character) then
-        LP.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = 16
-    end
-    
-    for _, label in pairs(self.Tracking.espLabels) do
-        if label and label.Parent then
-            label:Destroy()
-        end
-    end
-    
+    for _, label in pairs(self.Tracking.espLabels) do if label and label.Parent then label:Destroy() end end
     for _, p in pairs(Players:GetPlayers()) do
-        if p.Character and p.Character:FindFirstChild("PlayerHighlight") then
-            p.Character.PlayerHighlight:Destroy()
-        end
+        if p.Character and p.Character:FindFirstChild("PlayerHighlight") then p.Character.PlayerHighlight:Destroy() end
     end
     
+    table.clear(self.CacheMetals)
+    table.clear(self.CacheItems)
     self.Tracking.espLabels = setmetatable({}, {__mode = "k"})
     self.Tracking.playerHighlights = setmetatable({}, {__mode = "k"})
     self.Tracking.playerLabels = setmetatable({}, {__mode = "k"})
@@ -640,6 +731,10 @@ function ApexScript:Initialize()
     self:MakeButton("SPEED HACK: OFF", function(btn) self:ToggleSpeedHack(btn) end)
     self:MakeButton("VOAR: OFF", function(btn) self:ToggleFly(btn) end)
     self:MakeButton("INF JUMP: OFF", function(btn) self:ToggleInfiniteJump(btn) end)
+    
+    -- Combate e Interação
+    self:MakeButton("KILL AURA: OFF", function(btn) self:ToggleKillAura(btn) end)
+    self:BuildSlider()
     
     self:MakeButton("INSTANT INTERACT", function(btn)
         if self:InstantInteract() then
@@ -660,7 +755,6 @@ function ApexScript:Initialize()
     self:InitializeInfiniteJump()
     
     print("[Sherlock Apex] ✓ Carregado com sucesso!")
-    print("[Sherlock Apex] ✓ BRING: Itens trazidos com PHYSICS ativada (caem naturalmente)")
 end
 
 -- ====== EXECUÇÃO ======
