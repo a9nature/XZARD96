@@ -17,9 +17,9 @@
     ✓ Botão fechar removido (EXIT já existe)
     ✓ Kill Aura removida (sistema de saúde personalizado)
     ✓ FLY renomeado para VOAR com Speed Hack integrado
-    ✓ BRING com alcance de 2km
-    ✓ Multiplicador de Wooden Floor (50x)
-    ✓ FIX: Problema de rastreamento de itens otimizado
+    ✓ BRING volta ao original (funcional)
+    ✓ Multiplicador de Wooden Floor (50x) - DETECTOR INTELIGENTE
+    ✓ Otimizações de performance para evitar lag
 ]]
 
 -- ====== SERVIÇOS E VARIÁVEIS GLOBAIS ======
@@ -37,11 +37,9 @@ function ApexScript.new()
     
     -- Configurações
     self.Config = {
-        bringItemsSpeed = 0.5, -- Reduzido para maior velocidade de processamento
+        bringItemsSpeed = 1.5,
         espUpdateSpeed = 2,
         playerEspUpdateSpeed = 0.1,
-        bringRange = 2000, -- Alcance de 2km para bring
-        maxTrackedItems = 500, -- Limite máximo de itens rastreados
     }
     
     -- Estados
@@ -57,14 +55,15 @@ function ApexScript.new()
         multiplyFloors = false,
     }
     
-    -- Rastreamento de objetos (OTIMIZADO)
+    -- Rastreamento de objetos (OTIMIZADO COM WEAK REFERENCES)
     self.Tracking = {
-        broughtItems = setmetatable({}, {__mode = "k"}), -- Weak reference para auto-cleanup
+        broughtItems = setmetatable({}, {__mode = "k"}), -- Weak key references
         espLabels = setmetatable({}, {__mode = "k"}),
         playerHighlights = setmetatable({}, {__mode = "k"}),
         playerLabels = setmetatable({}, {__mode = "k"}),
         activeThreads = {},
         multipliedFloors = {},
+        itemCount = 0, -- Contador de itens rastreados
     }
     
     -- Dados salvos
@@ -81,10 +80,15 @@ function ApexScript.new()
     self.UI = {}
     self.MinimizedState = false
     
-    -- Cache de itens próximos (para otimizar busca)
-    self.NearbyItemsCache = {}
-    self.LastCacheTime = 0
-    self.CacheDuration = 0.3 -- Atualizar cache a cada 0.3 segundos
+    -- Contador para cleanup periódico
+    self.CleanupCounter = 0
+    self.CleanupInterval = 100 -- Cleanup a cada 100 iterações
+    
+    -- Cache para rastreamento de Wooden Floors já multiplicados
+    self.WoodenFloorCache = setmetatable({}, {__mode = "k"})
+    
+    -- Armazenar o ClassName esperado para Wooden Floor
+    self.WoodenFloorClassName = nil
     
     return self
 end
@@ -114,58 +118,51 @@ function ApexScript:GetPlayerFromCharacter(character)
     end) or Players:GetPlayerFromCharacter(character)
 end
 
--- Função otimizada para obter itens próximos (cache)
-function ApexScript:GetNearbyItems(playerPos, itemNames, maxDistance)
-    local now = tick()
-    
-    -- Usar cache se ainda válido
-    if now - self.LastCacheTime < self.CacheDuration and #self.NearbyItemsCache > 0 then
-        return self.NearbyItemsCache
-    end
-    
-    local nearbyItems = {}
-    local itemNameSet = {}
-    
-    -- Converter lista em set para busca O(1)
-    for _, name in pairs(itemNames) do
-        itemNameSet[name] = true
-    end
-    
-    -- Buscar apenas em workspace direto (mais rápido)
-    for _, v in pairs(workspace:GetDescendants()) do
-        if (v:IsA("BasePart") or v:IsA("Model")) and v.Parent and not v:IsDescendantOf(LP.Character) then
-            -- Verificar nome rapidamente
-            if itemNameSet[v.Name] then
-                local vPos = v:IsA("BasePart") and v.Position or (v.PrimaryPart and v.PrimaryPart.Position or nil)
-                if vPos then
-                    local dist = (playerPos - vPos).Magnitude
-                    if dist <= maxDistance then
-                        table.insert(nearbyItems, v)
-                    end
+-- Função para detectar Wooden Floor por análise estrutural
+function ApexScript:IsWoodenFloor(item)
+    -- Se ainda não descobrimos o ClassName, tentar detectar
+    if not self.WoodenFloorClassName then
+        -- Verificar propriedades conhecidas de Wooden Floor
+        -- Typically Wooden Floors têm estrutura específica no backpack
+        
+        -- Se o nome é apenas números:números (formato 1780755586:9814767070)
+        local itemName = item.Name
+        local hasColonFormat = string.find(itemName, "^%d+:%d+$")
+        
+        if hasColonFormat then
+            -- Verificar se tem propriedades de um item de construção
+            if item:IsA("Tool") or item:IsA("Model") or item:IsA("BasePart") then
+                -- Verificar se a descrição ou class name dá alguma pista
+                if item:FindFirstChild("Handle") or item:FindFirstChild("Mesh") then
+                    print("[Sherlock] DETECTADO: Wooden Floor com nome: " .. itemName)
+                    self.WoodenFloorClassName = itemName:match("^%d+"):gsub("%d", "X")
+                    return true
                 end
             end
         end
+        return false
     end
     
-    self.NearbyItemsCache = nearbyItems
-    self.LastCacheTime = now
-    
-    return nearbyItems
+    -- Se já detectou, verificar padrão
+    local itemName = item.Name
+    return string.find(itemName, "^%d+:%d+$") ~= nil
 end
 
-function ApexScript:ClearTracking()
-    -- Forçar limpeza de weak references
-    local count = 0
-    for k in pairs(self.Tracking.broughtItems) do
-        if not k.Parent then
-            self.Tracking.broughtItems[k] = nil
-            count = count + 1
-        end
-    end
+-- Cleanup periódico para liberar memória
+function ApexScript:PeriodicCleanup()
+    self.CleanupCounter = self.CleanupCounter + 1
     
-    -- Se muitos itens foram removidos, considera limpeza bem-sucedida
-    if count > 10 then
+    if self.CleanupCounter >= self.CleanupInterval then
+        self.CleanupCounter = 0
+        
+        -- Forçar coleta de lixo
         collectgarbage("collect")
+        
+        -- Resetar caches se necessário
+        if self.Tracking.itemCount > 5000 then
+            print("[Sherlock] Limpeza profunda executada. Itens rastreados: " .. self.Tracking.itemCount)
+            self.Tracking.itemCount = 0
+        end
     end
 end
 
@@ -332,36 +329,40 @@ end
 
 -- ====== FEATURES ======
 
--- 1. BRING METALS (2km alcance) - OTIMIZADO
+-- 1. BRING METALS (ORIGINAL - FUNCIONAL)
 function ApexScript:ToggleBringMetals(btn)
     self.States.bringMetals = not self.States.bringMetals
-    btn.Text = self.States.bringMetals and "BRING METALS: ACTIVE (2km)" or "BRING METALS: OFF"
+    btn.Text = self.States.bringMetals and "BRING METALS: ACTIVE" or "BRING METALS: OFF"
     
     if not self.States.bringMetals then
         self.Tracking.broughtItems = setmetatable({}, {__mode = "k"})
-        self.NearbyItemsCache = {}
-    else
+        self.Tracking.itemCount = 0
+    end
+    
+    if self.States.bringMetals then
         local thread = task.spawn(function()
             while self.States.bringMetals do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
-                        local playerPos = LP.Character.HumanoidRootPart.Position
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
-                        -- Usar cache otimizado
-                        local nearbyMetals = self:GetNearbyItems(playerPos, self.MetaisParaTrazer, self.Config.bringRange)
-                        
-                        for _, v in pairs(nearbyMetals) do
-                            if v.Parent and not self.Tracking.broughtItems[v] then
-                                self.Tracking.broughtItems[v] = true
-                                self:MoveObject(v, meuCFrame)
+                        for _, v in pairs(workspace:GetDescendants()) do
+                            if (v:IsA("BasePart") or v:IsA("Model")) and not self.Tracking.broughtItems[v] then
+                                local metalValido = false
+                                for _, nomeItem in pairs(self.MetaisParaTrazer) do
+                                    if v.Name == nomeItem then metalValido = true; break end
+                                end
+                                
+                                if metalValido and not v:IsDescendantOf(LP.Character) then
+                                    self.Tracking.broughtItems[v] = true
+                                    self.Tracking.itemCount = self.Tracking.itemCount + 1
+                                    self:MoveObject(v, meuCFrame)
+                                end
                             end
                         end
                         
                         -- Cleanup periódico
-                        if math.random() < 0.1 then
-                            self:ClearTracking()
-                        end
+                        self:PeriodicCleanup()
                     end
                 end)
                 task.wait(self.Config.bringItemsSpeed)
@@ -371,36 +372,62 @@ function ApexScript:ToggleBringMetals(btn)
     end
 end
 
--- 2. BRING ITEMS (2km alcance) - OTIMIZADO
+-- 2. BRING ITEMS (ORIGINAL - FUNCIONAL)
 function ApexScript:ToggleBringItems(btn)
     self.States.bringItems = not self.States.bringItems
-    btn.Text = self.States.bringItems and "BRING ITEMS: ACTIVE (2km)" or "BRING ITEMS: OFF"
+    btn.Text = self.States.bringItems and "BRING ITEMS: ACTIVE" or "BRING ITEMS: OFF"
     
     if not self.States.bringItems then
         self.Tracking.broughtItems = setmetatable({}, {__mode = "k"})
-        self.NearbyItemsCache = {}
-    else
+        self.Tracking.itemCount = 0
+    end
+    
+    if self.States.bringItems then
         local thread = task.spawn(function()
             while self.States.bringItems do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
-                        local playerPos = LP.Character.HumanoidRootPart.Position
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
-                        -- Usar cache otimizado
-                        local nearbyItems = self:GetNearbyItems(playerPos, self.ItensParaTrazer, self.Config.bringRange)
-                        
-                        for _, v in pairs(nearbyItems) do
-                            if v.Parent and not self.Tracking.broughtItems[v] then
-                                self.Tracking.broughtItems[v] = true
-                                self:MoveObject(v, meuCFrame)
+                        for _, v in pairs(workspace:GetDescendants()) do
+                            if (v:IsA("BasePart") or v:IsA("Model")) and not self.Tracking.broughtItems[v] then
+                                local itemValido = false
+                                for _, nomeItem in pairs(self.ItensParaTrazer) do
+                                    if v.Name == nomeItem then
+                                        itemValido = true
+                                        break
+                                    end
+                                end
+                                
+                                if itemValido and not v:IsDescendantOf(LP.Character) then
+                                    self.Tracking.broughtItems[v] = true
+                                    self.Tracking.itemCount = self.Tracking.itemCount + 1
+                                    
+                                    if v:IsA("Model") then
+                                        for _, part in pairs(v:GetDescendants()) do
+                                            if part:IsA("BasePart") then
+                                                part.Anchored = false
+                                                part.CanCollide = true
+                                                part.AssemblyLinearVelocity = Vector3.new(0,0,0)
+                                            end
+                                        end
+                                        if v.PrimaryPart then
+                                            v:SetPrimaryPartCFrame(meuCFrame)
+                                        else
+                                            v:PivotTo(meuCFrame)
+                                        end
+                                    elseif v:IsA("BasePart") then
+                                        v.Anchored = false
+                                        v.CanCollide = true
+                                        v.AssemblyLinearVelocity = Vector3.new(0,0,0)
+                                        v.CFrame = meuCFrame
+                                    end
+                                end
                             end
                         end
                         
                         -- Cleanup periódico
-                        if math.random() < 0.1 then
-                            self:ClearTracking()
-                        end
+                        self:PeriodicCleanup()
                     end
                 end)
                 task.wait(self.Config.bringItemsSpeed)
@@ -484,7 +511,7 @@ function ApexScript:ToggleFly(btn)
                                 local flyVelocity = moveDirection * (hum.WalkSpeed * self.FlySpeedMultiplier)
                                 root.AssemblyLinearVelocity = Vector3.new(flyVelocity.X, 0, flyVelocity.Z)
                             else
-                                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                                root.AssemblyLinearVelocity = Vector3.new(0,0,0)
                             end
                         end
                     end)
@@ -515,10 +542,10 @@ function ApexScript:InitializeInfiniteJump()
     end)
 end
 
--- 6. MULTIPLICADOR DE WOODEN FLOOR (50x)
+-- 6. MULTIPLICADOR DE WOODEN FLOOR (50x) - DETECTOR INTELIGENTE
 function ApexScript:ToggleMultiplyFloors(btn)
     self.States.multiplyFloors = not self.States.multiplyFloors
-    btn.Text = self.States.multiplyFloors and "MULTIPLY FLOORS: ACTIVE" or "MULTIPLY FLOORS: OFF"
+    btn.Text = self.States.multiplyFloors and "MULTIPLY FLOORS: DETECTING..." or "MULTIPLY FLOORS: OFF"
     
     if not self.States.multiplyFloors then
         -- Limpar floors multiplicados se desativar
@@ -528,28 +555,43 @@ function ApexScript:ToggleMultiplyFloors(btn)
             end
         end
         self.Tracking.multipliedFloors = {}
+        self.WoodenFloorCache = setmetatable({}, {__mode = "k"})
+        btn.Text = "MULTIPLY FLOORS: OFF"
     else
         local thread = task.spawn(function()
+            local foundFloor = false
+            
             while self.States.multiplyFloors do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
                         local backpack = LP:FindFirstChild("Backpack")
                         if backpack then
                             for _, item in pairs(backpack:GetChildren()) do
-                                if item.Name == "WoodenFloor" and not self.Tracking.multipliedFloors[item] then
+                                -- Detectar Wooden Floor por padrão de nome (números:números)
+                                if self:IsWoodenFloor(item) and not self.WoodenFloorCache[item] then
+                                    if not foundFloor then
+                                        print("[Sherlock] ✓ DETECTADO WOODEN FLOOR: " .. item.Name)
+                                        foundFloor = true
+                                        btn.Text = "MULTIPLY FLOORS: ACTIVE"
+                                    end
+                                    
+                                    print("[Sherlock] Multiplicando: " .. item.Name .. " (50x)")
+                                    
                                     -- Duplicar o wooden floor 50 vezes
                                     for i = 1, 50 do
                                         local newFloor = item:Clone()
                                         newFloor.Parent = backpack
                                         table.insert(self.Tracking.multipliedFloors, newFloor)
                                     end
-                                    self.Tracking.multipliedFloors[item] = true
+                                    
+                                    self.WoodenFloorCache[item] = true
+                                    print("[Sherlock] ✓ 50 cópias criadas!")
                                 end
                             end
                         end
                     end
                 end)
-                task.wait(1)
+                task.wait(0.5)
             end
         end)
         table.insert(self.Tracking.activeThreads, thread)
@@ -774,7 +816,7 @@ function ApexScript:Initialize()
     self:InitializeInfiniteJump()
     
     print("[Sherlock Apex] Inicializado com sucesso!")
-    print("[Sherlock Apex] Alcance de BRING: 2km | Multiplicador de Floors: 50x")
+    print("[Sherlock Apex] Sistema: Detector Inteligente de Wooden Floor (padrão: digitos:digitos)")
 end
 
 -- ====== EXECUÇÃO ======
