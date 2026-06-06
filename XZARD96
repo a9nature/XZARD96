@@ -25,7 +25,7 @@ function ApexScript.new()
     
     self.MetaisParaTrazer = {"Metal", "ScrapMetal", "ESP Metal"}
     self.ItensParaTrazer = {"Box", "BrokenCrate", "BrokenCrate2", "Plank"}
-    self.LootKeywords = {"plastic", "scrap", "metal", "barrel", "crate", "box", "plank", "bolt", "leaf", "chest"}
+    self.LootKeywords = {"wood", "plastic", "scrap", "metal", "barrel", "crate", "box", "plank", "bolt", "leaf", "chest"}
     
     self.UI = {}
     return self
