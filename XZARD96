@@ -14,9 +14,9 @@
     ✓ Performance otimizada com cache
     ✓ Melhor detecção de team
     ✓ UI mais responsiva com tween suave
-    ✓ BRING METALS e BRING ITEMS - Suporta repetição infinita
-    ✓ Itens trazidos são destruídos/despawnados
-    ✓ Performance máxima para loop infinito
+    ✓ BRING METALS e BRING ITEMS - Otimizados para não falhar
+    ✓ Otimizações de performance críticas
+    ✓ Sistema robusto de rastreamento com weak references
 ]]
 
 -- ====== SERVIÇOS E VARIÁVEIS GLOBAIS ======
@@ -34,7 +34,7 @@ function ApexScript.new()
     
     -- Configurações
     self.Config = {
-        bringItemsSpeed = 1.2,
+        bringItemsSpeed = 1.2, -- Otimizado
         espUpdateSpeed = 2,
         playerEspUpdateSpeed = 0.1,
     }
@@ -50,12 +50,14 @@ function ApexScript.new()
         playerEsp = false,
     }
     
-    -- Rastreamento - apenas para limpeza de ESP
+    -- Rastreamento de objetos (OTIMIZADO COM WEAK REFERENCES)
     self.Tracking = {
+        broughtItems = setmetatable({}, {__mode = "k"}), -- Weak key references
         espLabels = setmetatable({}, {__mode = "k"}),
         playerHighlights = setmetatable({}, {__mode = "k"}),
         playerLabels = setmetatable({}, {__mode = "k"}),
         activeThreads = {},
+        processedFrames = 0,
     }
     
     -- Dados salvos
@@ -231,39 +233,49 @@ end
 
 -- ====== FEATURES ======
 
--- 1. BRING METALS - LOOP INFINITO OTIMIZADO
+-- 1. BRING METALS - ROBUSTO
 function ApexScript:ToggleBringMetals(btn)
     self.States.bringMetals = not self.States.bringMetals
     btn.Text = self.States.bringMetals and "BRING METALS: ACTIVE" or "BRING METALS: OFF"
     
+    if not self.States.bringMetals then
+        self.Tracking.broughtItems = setmetatable({}, {__mode = "k"})
+    end
+    
     if self.States.bringMetals then
         local thread = task.spawn(function()
-            -- Criar set para lookup O(1) - fora do loop
-            local metalSet = {}
-            for _, name in pairs(self.MetaisParaTrazer) do
-                metalSet[name] = true
-            end
-            
             while self.States.bringMetals do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
+                        -- Criar set para lookup O(1)
+                        local metalSet = {}
+                        for _, name in pairs(self.MetaisParaTrazer) do
+                            metalSet[name] = true
+                        end
+                        
                         -- Buscar todos os descendentes
                         for _, v in pairs(workspace:GetDescendants()) do
-                            -- Verificações rápidas em ordem
+                            -- Verificações rápidas primeiro
                             if not (v:IsA("BasePart") or v:IsA("Model")) then continue end
+                            if self.Tracking.broughtItems[v] then continue end
                             if v:IsDescendantOf(LP.Character) then continue end
                             if not v.Parent then continue end
                             
                             -- Verificar nome (lookup O(1) em set)
                             if metalSet[v.Name] then
+                                self.Tracking.broughtItems[v] = true
                                 self:MoveObject(v, meuCFrame)
                             end
                         end
                         
-                        -- Garbage collection periódico (leve)
-                        collectgarbage("step", 1)
+                        -- Cleanup periódico leve
+                        self.Tracking.processedFrames = self.Tracking.processedFrames + 1
+                        if self.Tracking.processedFrames >= 100 then
+                            self.Tracking.processedFrames = 0
+                            collectgarbage("collect")
+                        end
                     end
                 end)
                 task.wait(self.Config.bringItemsSpeed)
@@ -273,39 +285,49 @@ function ApexScript:ToggleBringMetals(btn)
     end
 end
 
--- 2. BRING ITEMS - LOOP INFINITO OTIMIZADO
+-- 2. BRING ITEMS - ROBUSTO E CONFIÁVEL
 function ApexScript:ToggleBringItems(btn)
     self.States.bringItems = not self.States.bringItems
     btn.Text = self.States.bringItems and "BRING ITEMS: ACTIVE" or "BRING ITEMS: OFF"
     
+    if not self.States.bringItems then
+        self.Tracking.broughtItems = setmetatable({}, {__mode = "k"})
+    end
+    
     if self.States.bringItems then
         local thread = task.spawn(function()
-            -- Criar set para lookup O(1) - fora do loop
-            local itemSet = {}
-            for _, name in pairs(self.ItensParaTrazer) do
-                itemSet[name] = true
-            end
-            
             while self.States.bringItems do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
+                        -- Criar set para lookup O(1)
+                        local itemSet = {}
+                        for _, name in pairs(self.ItensParaTrazer) do
+                            itemSet[name] = true
+                        end
+                        
                         -- Buscar todos os descendentes
                         for _, v in pairs(workspace:GetDescendants()) do
-                            -- Verificações rápidas em ordem
+                            -- Verificações rápidas primeiro
                             if not (v:IsA("BasePart") or v:IsA("Model")) then continue end
+                            if self.Tracking.broughtItems[v] then continue end
                             if v:IsDescendantOf(LP.Character) then continue end
                             if not v.Parent then continue end
                             
                             -- Verificar nome (lookup O(1) em set)
                             if itemSet[v.Name] then
+                                self.Tracking.broughtItems[v] = true
                                 self:MoveObject(v, meuCFrame)
                             end
                         end
                         
-                        -- Garbage collection periódico (leve)
-                        collectgarbage("step", 1)
+                        -- Cleanup periódico leve
+                        self.Tracking.processedFrames = self.Tracking.processedFrames + 1
+                        if self.Tracking.processedFrames >= 100 then
+                            self.Tracking.processedFrames = 0
+                            collectgarbage("collect")
+                        end
                     end
                 end)
                 task.wait(self.Config.bringItemsSpeed)
@@ -626,7 +648,8 @@ function ApexScript:Initialize()
     self:InitializeInfiniteJump()
     
     print("[Sherlock Apex] ✓ Carregado com sucesso!")
-    print("[Sherlock Apex] ✓ BRING: Loop infinito otimizado para centenas de repetições")
+    print("[Sherlock Apex] ✓ BRING METALS: Metal, ScrapMetal, ESP Metal")
+    print("[Sherlock Apex] ✓ BRING ITEMS: BrokenCrate, BrokenCrate2, Plank")
 end
 
 -- ====== EXECUÇÃO ======
