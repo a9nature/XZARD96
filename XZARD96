@@ -15,7 +15,7 @@
     ✓ Melhor detecção de team
     ✓ UI mais responsiva com tween suave
     ✓ BRING METALS e BRING ITEMS - Loop infinito
-    ✓ PHYSICS HABILITADA - Itens caem naturalmente após trazer
+    ✓ PHYSICS HABILITADA - Itens caem naturalmente após trazer (CORRIGIDO)
     ✓ Itens respawnam automaticamente para repetição infinita
 ]]
 
@@ -231,7 +231,7 @@ end
 
 -- ====== FEATURES ======
 
--- 1. BRING METALS - COM PHYSICS
+-- 1. BRING METALS - COM PHYSICS CORRIGIDO
 function ApexScript:ToggleBringMetals(btn)
     self.States.bringMetals = not self.States.bringMetals
     btn.Text = self.States.bringMetals and "BRING METALS: ACTIVE" or "BRING METALS: OFF"
@@ -259,8 +259,11 @@ function ApexScript:ToggleBringMetals(btn)
                             -- Verificar nome (lookup O(1) em set)
                             if metalSet[v.Name] then
                                 self:MoveObject(v, meuCFrame)
-                                -- Ativar physics após trazer
-                                self:EnablePhysics(v)
+                                
+                                -- Liberar gravidade IMEDIATAMENTE em uma thread separada
+                                task.delay(0.1, function()
+                                    self:EnablePhysics(v)
+                                end)
                             end
                         end
                         
@@ -275,7 +278,7 @@ function ApexScript:ToggleBringMetals(btn)
     end
 end
 
--- 2. BRING ITEMS - COM PHYSICS
+-- 2. BRING ITEMS - COM PHYSICS CORRIGIDO
 function ApexScript:ToggleBringItems(btn)
     self.States.bringItems = not self.States.bringItems
     btn.Text = self.States.bringItems and "BRING ITEMS: ACTIVE" or "BRING ITEMS: OFF"
@@ -303,8 +306,11 @@ function ApexScript:ToggleBringItems(btn)
                             -- Verificar nome (lookup O(1) em set)
                             if itemSet[v.Name] then
                                 self:MoveObject(v, meuCFrame)
-                                -- Ativar physics após trazer
-                                self:EnablePhysics(v)
+                                
+                                -- Liberar gravidade IMEDIATAMENTE em uma thread separada
+                                task.delay(0.1, function()
+                                    self:EnablePhysics(v)
+                                end)
                             end
                         end
                         
@@ -319,16 +325,19 @@ function ApexScript:ToggleBringItems(btn)
     end
 end
 
--- Função auxiliar para mover objetos
+-- Função auxiliar para mover objetos (IMOBILIZA)
 function ApexScript:MoveObject(obj, targetCFrame)
     if obj:IsA("Model") then
+        -- Imobilizar todas as partes
         for _, part in pairs(obj:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.Anchored = true
                 part.CanCollide = false
-                part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0) -- Zero massa/atrito
             end
         end
+        
+        -- Mover
         if obj.PrimaryPart then
             obj:SetPrimaryPartCFrame(targetCFrame)
         else
@@ -337,25 +346,29 @@ function ApexScript:MoveObject(obj, targetCFrame)
     elseif obj:IsA("BasePart") then
         obj.Anchored = true
         obj.CanCollide = false
-        obj.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        obj.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0) -- Zero massa/atrito
         obj.CFrame = targetCFrame
     end
 end
 
--- Função para ATIVAR physics (deixar cair)
+-- Função para ATIVAR physics (deixar cair) - CORRIGIDA
 function ApexScript:EnablePhysics(obj)
-    if obj:IsA("Model") then
-        for _, part in pairs(obj:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.Anchored = false
-                part.CanCollide = true
-                part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+    if obj and obj.Parent then
+        if obj:IsA("Model") then
+            for _, part in pairs(obj:GetDescendants()) do
+                if part:IsA("BasePart") and part.Parent then
+                    part.Anchored = false
+                    part.CanCollide = true
+                    part.CustomPhysicalProperties = nil -- Restaurar propriedades padrão
+                    part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                end
             end
+        elseif obj:IsA("BasePart") then
+            obj.Anchored = false
+            obj.CanCollide = true
+            obj.CustomPhysicalProperties = nil -- Restaurar propriedades padrão
+            obj.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         end
-    elseif obj:IsA("BasePart") then
-        obj.Anchored = false
-        obj.CanCollide = true
-        obj.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
     end
 end
 
