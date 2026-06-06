@@ -1,124 +1,151 @@
 --[[
     ╔═══════════════════════════════════════════════════════════════╗
-    ║  SHERLOCK APEX V94 ULTRA - FINAL PRODUCTION BUILD             ║
-    ║  - OTIMIZAÇÕES: table.clear implementado (Performance Máx).   ║
-    ║  - ACESSO GLOBAL: getgenv().SherlockApex = apex (Controle via Console)║
-    ║  - ESTABILIDADE: Limpeza dinâmica de memória garantida.       ║
+    ║  SHERLOCK APEX V94 ULTRA - STEALTH & FARM EDITION             ║
+    ║  - BRING: Filtro estrito (Ignora estruturas ancoradas).       ║
+    ║  - MOVIMENTO: Vetorial Camuflado (Bypass Anti-Cheat).         ║
     ╚═══════════════════════════════════════════════════════════════╝
 ]]
 
--- ====== SERVIÇOS E VARIÁVEIS GLOBAIS ======
 local UIS = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local LP = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- ====== CLASSE PRINCIPAL ======
 local ApexScript = {}
 ApexScript.__index = ApexScript
 
 function ApexScript.new()
     local self = setmetatable({}, ApexScript)
-    
-    self.Config = { bringItemsSpeed = 1.5, espUpdateSpeed = 2, playerEspUpdateSpeed = 0.1, bringRange = 2000, maxCacheSize = 10 }
-    self.States = { bringMetals = false, bringItems = false, speedHack = false, fly = false, infJump = false, itemEsp = false, playerEsp = false, multiplyFloors = false }
-    self.Tracking = { broughtItems = {}, espLabels = {}, playerHighlights = {}, playerLabels = {}, activeThreads = {}, multipliedFloors = {} }
-    
+    self.Config = { bringItemsSpeed = 1.5, bringRange = 2000, maxCacheSize = 10 }
+    self.States = { bringMetals = false, bringItems = false, speedHack = false, fly = false, infJump = false, itemEsp = false }
+    self.Tracking = { broughtItems = {}, espLabels = {}, activeThreads = {} }
     self.OriginalGravity = workspace.Gravity
+    self.CustomSpeedValue = 200 -- Velocidade vetorial (camuflada)
     self.FlySpeedMultiplier = 5
-    self.CustomSpeedValue = 200
     
     self.MetaisParaTrazer = {"Metal", "ScrapMetal", "ESP Metal"}
     self.ItensParaTrazer = {"Box", "BrokenCrate", "BrokenCrate2", "Plank"}
-    self.ArmasSuportadas = {"Machete", "Machado", "Arpão", "Machete ", "Machado ", "Arpão ", "Sword", "Espada"}
     self.LootKeywords = {"wood", "plastic", "scrap", "metal", "barrel", "crate", "box", "plank", "bolt", "leaf", "chest"}
     
     self.UI = {}
-    self.MinimizedState = false
-    
     return self
 end
 
--- ====== UTILITÁRIOS ======
-function ApexScript:SafeCall(func, ...)
-    local success, result = pcall(func, ...)
-    if not success then warn("[Sherlock] Erro: " .. tostring(result)) end
-    return result
+function ApexScript:MoveObject(obj, targetCFrame)
+    -- Lógica de Network Ownership para estabilizar
+    local function setNetwork(part)
+        pcall(function() part:SetNetworkOwner(LP) end)
+        part.Anchored = true
+        part.CanCollide = false
+    end
+    
+    if obj:IsA("Model") then
+        for _, p in pairs(obj:GetDescendants()) do if p:IsA("BasePart") then setNetwork(p) end end
+        if obj.PrimaryPart then obj:SetPrimaryPartCFrame(targetCFrame) else obj:PivotTo(targetCFrame) end
+    elseif obj:IsA("BasePart") then
+        setNetwork(obj)
+        obj.CFrame = targetCFrame
+    end
 end
 
-function ApexScript:IsValidCharacter(character)
-    return character and character.Parent and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChildOfClass("Humanoid")
+function ApexScript:EnablePhysics(obj)
+    task.delay(0.2, function()
+        local function release(part)
+            if part:IsA("BasePart") then
+                part.Anchored = false
+                part.CanCollide = true
+                part.AssemblyLinearVelocity = Vector3.new(0, -2, 0)
+            end
+        end
+        if obj:IsA("Model") then for _, p in pairs(obj:GetDescendants()) do release(p) end
+        elseif obj:IsA("BasePart") then release(obj) end
+    end)
 end
 
--- ====== REUSO DE MEMÓRIA (OTIMIZAÇÃO) ======
-function ApexScript:Cleanup()
-    self.States.bringMetals = false
-    self.States.bringItems = false
-    self.States.speedHack = false
-    self.States.fly = false
-    self.States.itemEsp = false
-    self.States.playerEsp = false
-    self.States.multiplyFloors = false
+-- ====== BRING (Com filtro anti-estrutura) ======
+function ApexScript:ToggleBring(btn, list, cache)
+    local stateKey = (list == self.MetaisParaTrazer) and "bringMetals" or "bringItems"
+    self.States[stateKey] = not self.States[stateKey]
+    btn.Text = self.States[stateKey] and "BRING: ACTIVE" or "BRING: OFF"
     
-    for _, thread in pairs(self.Tracking.activeThreads) do pcall(task.cancel, thread) end
-    self.Tracking.activeThreads = {}
-    
-    workspace.Gravity = self.OriginalGravity
-    if self:IsValidCharacter(LP.Character) then LP.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = 16 end
-    
-    -- OTIMIZAÇÃO: Limpeza de tabelas sem destruir o objeto tabela (Reuso de memória)
-    table.clear(self.Tracking.broughtItems)
-    table.clear(self.Tracking.espLabels)
-    table.clear(self.Tracking.playerHighlights)
-    table.clear(self.Tracking.playerLabels)
-    table.clear(self.Tracking.multipliedFloors)
-    
-    print("[Sherlock Apex] Memória limpa e threads paradas.")
+    if self.States[stateKey] then
+        local thread = task.spawn(function()
+            while self.States[stateKey] do
+                pcall(function()
+                    if LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+                        local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
+                        for _, v in pairs(workspace:GetDescendants()) do
+                            -- FILTRO: Ignora ancorados (estruturas) e mantém apenas itens soltos
+                            if (v:IsA("BasePart") or v:IsA("Model")) and not v.Anchored and v.Parent == workspace then
+                                if table.find(list, v.Name) and not table.find(cache, v) then
+                                    if #cache >= self.Config.maxCacheSize then table.remove(cache, 1) end
+                                    table.insert(cache, v)
+                                    self:MoveObject(v, meuCFrame)
+                                    self:EnablePhysics(v)
+                                end
+                            end
+                        end
+                    end
+                end)
+                task.wait(self.Config.bringItemsSpeed)
+            end
+        end)
+        table.insert(self.Tracking.activeThreads, thread)
+    end
 end
 
--- ====== MÉTODOS DE UI ======
+-- ====== MOVIEMENTO VETORIAL CAMUFLADO ======
+function ApexScript:ToggleSpeedHack(btn)
+    self.States.speedHack = not self.States.speedHack
+    btn.Text = self.States.speedHack and "SPEED: ACTIVE" or "SPEED: OFF"
+    task.spawn(function()
+        while self.States.speedHack and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") do
+            local hum = LP.Character.Humanoid
+            local root = LP.Character.HumanoidRootPart
+            if hum.MoveDirection.Magnitude > 0 then
+                root.AssemblyLinearVelocity = Vector3.new(hum.MoveDirection.X * self.CustomSpeedValue, root.AssemblyLinearVelocity.Y, hum.MoveDirection.Z * self.CustomSpeedValue)
+            end
+            task.wait(0.01)
+        end
+    end)
+end
+
+function ApexScript:ToggleFly(btn)
+    self.States.fly = not self.States.fly
+    btn.Text = self.States.fly and "VOAR: ACTIVE" or "VOAR: OFF"
+    task.spawn(function()
+        while self.States.fly and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") do
+            workspace.Gravity = 0
+            local root = LP.Character.HumanoidRootPart
+            local move = LP.Character.Humanoid.MoveDirection
+            if move.Magnitude > 0 then
+                root.AssemblyLinearVelocity = Vector3.new(move.X * (self.CustomSpeedValue * self.FlySpeedMultiplier), 0, move.Z * (self.CustomSpeedValue * self.FlySpeedMultiplier))
+            else
+                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            end
+            task.wait(0.01)
+        end
+        workspace.Gravity = self.OriginalGravity
+    end)
+end
+
+-- ====== UI E INICIALIZAÇÃO ======
 function ApexScript:BuildUI()
-    local ApexHub = Instance.new("ScreenGui", game:GetService("CoreGui")); ApexHub.Name = "Apex_V94"
-    local Main = Instance.new("Frame", ApexHub); Main.Name = "MainFrame"; Main.BackgroundColor3 = Color3.fromRGB(12, 12, 18); Main.Position = UDim2.new(0.5, -130, 0.5, -200); Main.Size = UDim2.new(0, 260, 0, 440); Main.Active = true
+    local Hub = Instance.new("ScreenGui", game:GetService("CoreGui"))
+    local Main = Instance.new("Frame", Hub); Main.Size = UDim2.new(0, 260, 0, 400); Main.Position = UDim2.new(0.5, -130, 0.5, -200); Main.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+    local Content = Instance.new("ScrollingFrame", Main); Content.Size = UDim2.new(1, 0, 1, 0); Content.BackgroundTransparency = 1
+    Instance.new("UIListLayout", Content).Padding = UDim.new(0, 5)
     
-    -- Sistema de arrastar (Lightweight)
-    local dragging, dragStart, startPos
-    Main.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true; dragStart = input.Position; startPos = Main.Position end end)
-    UIS.InputChanged:Connect(function(input) if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + (input.Position.X - dragStart.X), startPos.Y.Scale, startPos.Y.Offset + (input.Position.Y - dragStart.Y)) end end)
-    UIS.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+    local function addButton(txt, cb)
+        local b = Instance.new("TextButton", Content); b.Size = UDim2.new(1, 0, 0, 40); b.Text = txt; b.BackgroundColor3 = Color3.fromRGB(30, 30, 40); b.TextColor3 = Color3.new(1,1,1); b.MouseButton1Click:Connect(cb)
+    end
     
-    Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 15)
-    local Content = Instance.new("ScrollingFrame", Main); Content.Position = UDim2.new(0, 15, 0, 60); Content.Size = UDim2.new(1, -30, 1, -75); Content.BackgroundTransparency = 1; Content.ScrollBarThickness = 3
-    local UIList = Instance.new("UIListLayout", Content); UIList.Padding = UDim.new(0, 8)
-    UIList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() Content.CanvasSize = UDim2.new(0, 0, 0, UIList.AbsoluteContentSize.Y + 20) end)
-    
-    self.UI.Hub = ApexHub; self.UI.Content = Content
-    return Content
-end
-
-function ApexScript:MakeButton(text, callback)
-    local btn = Instance.new("TextButton", self.UI.Content); btn.Size = UDim2.new(1, 0, 0, 45); btn.BackgroundColor3 = Color3.fromRGB(25, 25, 35); btn.Text = text; btn.TextColor3 = Color3.new(1, 1, 1); btn.Font = Enum.Font.GothamBold; btn.TextSize = 10; btn.BorderSizePixel = 0
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
-    btn.MouseButton1Click:Connect(function() callback(btn) end)
-end
-
--- ====== INICIALIZAÇÃO ======
-function ApexScript:Initialize()
-    self:BuildUI()
-    self:MakeButton("BRING METALS: OFF", function(btn) self:ToggleBringMetals(btn) end)
-    self:MakeButton("BRING ITEMS: OFF", function(btn) self:ToggleBringItems(btn) end)
-    self:MakeButton("SPEED HACK: OFF", function(btn) self:ToggleSpeedHack(btn) end)
-    self:MakeButton("VOAR: OFF", function(btn) self:ToggleFly(btn) end)
-    self:MakeButton("INF JUMP: OFF", function(btn) self:ToggleInfiniteJump(btn) end)
-    self:MakeButton("MULTIPLY FLOORS: OFF", function(btn) self:ToggleMultiplyFloors(btn) end)
-    self:MakeButton("INSTANT INTERACT", function() self:InstantInteract() end)
-    self:MakeButton("EXIT", function() self:Cleanup(); self.UI.Hub:Destroy() end)
-    
-    -- Inicialização global para controle externo
+    addButton("BRING METALS: OFF", function(btn) self:ToggleBring(btn, self.MetaisParaTrazer, self.CacheMetals) end)
+    addButton("BRING ITEMS: OFF", function(btn) self:ToggleBring(btn, self.ItensParaTrazer, self.CacheItems) end)
+    addButton("SPEED HACK: OFF", function(btn) self:ToggleSpeedHack(btn) end)
+    addButton("VOAR: OFF", function(btn) self:ToggleFly(btn) end)
+    addButton("EXIT", function() Hub:Destroy() end)
     getgenv().SherlockApex = self
-    print("[Sherlock Apex] Inicializado. Acesso global: getgenv().SherlockApex")
 end
 
--- ====== EXECUÇÃO ======
-local apex = ApexScript.new()
-apex:Initialize()
+ApexScript.new():BuildUI()
