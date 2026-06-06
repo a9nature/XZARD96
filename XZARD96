@@ -14,12 +14,9 @@
     ✓ Performance otimizada com cache
     ✓ Melhor detecção de team
     ✓ UI mais responsiva com tween suave
-    ✓ Botão fechar removido (EXIT já existe)
-    ✓ Kill Aura removida (sistema de saúde personalizado)
-    ✓ FLY renomeado para VOAR com Speed Hack integrado
-    ✓ BRING volta ao original (funcional)
-    ✓ Multiplicador de Wooden Floor (50x) - DETECTOR INTELIGENTE
-    ✓ Otimizações de performance para evitar lag
+    ✓ BRING METALS e BRING ITEMS - Loop infinito
+    ✓ PHYSICS HABILITADA - Itens caem naturalmente após trazer
+    ✓ Itens respawnam automaticamente para repetição infinita
 ]]
 
 -- ====== SERVIÇOS E VARIÁVEIS GLOBAIS ======
@@ -37,7 +34,7 @@ function ApexScript.new()
     
     -- Configurações
     self.Config = {
-        bringItemsSpeed = 1.5,
+        bringItemsSpeed = 1.2,
         espUpdateSpeed = 2,
         playerEspUpdateSpeed = 0.1,
     }
@@ -47,30 +44,25 @@ function ApexScript.new()
         bringMetals = false,
         bringItems = false,
         speedHack = false,
-        speedHackWhileFlying = false,
         fly = false,
         infJump = false,
         itemEsp = false,
         playerEsp = false,
-        multiplyFloors = false,
     }
     
-    -- Rastreamento de objetos (OTIMIZADO COM WEAK REFERENCES)
+    -- Rastreamento - apenas para limpeza de ESP
     self.Tracking = {
-        broughtItems = setmetatable({}, {__mode = "k"}), -- Weak key references
         espLabels = setmetatable({}, {__mode = "k"}),
         playerHighlights = setmetatable({}, {__mode = "k"}),
         playerLabels = setmetatable({}, {__mode = "k"}),
         activeThreads = {},
-        multipliedFloors = {},
-        itemCount = 0, -- Contador de itens rastreados
     }
     
     -- Dados salvos
     self.OriginalGravity = workspace.Gravity
     self.FlySpeedMultiplier = 5
     
-    -- Configurações de itens
+    -- Configurações de itens - LISTA SIMPLES E DIRETA
     self.MetaisParaTrazer = {"Metal", "ScrapMetal", "ESP Metal"}
     self.ItensParaTrazer = {"BrokenCrate", "BrokenCrate2", "Plank"}
     self.ArmasSuportadas = {"Machete", "Machado", "Arpão", "Machete ", "Machado ", "Arpão "}
@@ -80,16 +72,6 @@ function ApexScript.new()
     self.UI = {}
     self.MinimizedState = false
     
-    -- Contador para cleanup periódico
-    self.CleanupCounter = 0
-    self.CleanupInterval = 100 -- Cleanup a cada 100 iterações
-    
-    -- Cache para rastreamento de Wooden Floors já multiplicados
-    self.WoodenFloorCache = setmetatable({}, {__mode = "k"})
-    
-    -- Armazenar o ClassName esperado para Wooden Floor
-    self.WoodenFloorClassName = nil
-    
     return self
 end
 
@@ -97,7 +79,7 @@ end
 function ApexScript:SafeCall(func, ...)
     local success, result = pcall(func, ...)
     if not success then
-        warn("[Sherlock] Erro em SafeCall: " .. tostring(result))
+        warn("[Sherlock] Erro: " .. tostring(result))
     end
     return result
 end
@@ -112,67 +94,11 @@ function ApexScript:IsTeammate(player)
     return player.Team == LP.Team
 end
 
-function ApexScript:GetPlayerFromCharacter(character)
-    return Players:FindFirstChildOfClass("Player", function(p)
-        return p.Character == character
-    end) or Players:GetPlayerFromCharacter(character)
-end
-
--- Função para detectar Wooden Floor por análise estrutural
-function ApexScript:IsWoodenFloor(item)
-    -- Se ainda não descobrimos o ClassName, tentar detectar
-    if not self.WoodenFloorClassName then
-        -- Verificar propriedades conhecidas de Wooden Floor
-        -- Typically Wooden Floors têm estrutura específica no backpack
-        
-        -- Se o nome é apenas números:números (formato 1780755586:9814767070)
-        local itemName = item.Name
-        local hasColonFormat = string.find(itemName, "^%d+:%d+$")
-        
-        if hasColonFormat then
-            -- Verificar se tem propriedades de um item de construção
-            if item:IsA("Tool") or item:IsA("Model") or item:IsA("BasePart") then
-                -- Verificar se a descrição ou class name dá alguma pista
-                if item:FindFirstChild("Handle") or item:FindFirstChild("Mesh") then
-                    print("[Sherlock] DETECTADO: Wooden Floor com nome: " .. itemName)
-                    self.WoodenFloorClassName = itemName:match("^%d+"):gsub("%d", "X")
-                    return true
-                end
-            end
-        end
-        return false
-    end
-    
-    -- Se já detectou, verificar padrão
-    local itemName = item.Name
-    return string.find(itemName, "^%d+:%d+$") ~= nil
-end
-
--- Cleanup periódico para liberar memória
-function ApexScript:PeriodicCleanup()
-    self.CleanupCounter = self.CleanupCounter + 1
-    
-    if self.CleanupCounter >= self.CleanupInterval then
-        self.CleanupCounter = 0
-        
-        -- Forçar coleta de lixo
-        collectgarbage("collect")
-        
-        -- Resetar caches se necessário
-        if self.Tracking.itemCount > 5000 then
-            print("[Sherlock] Limpeza profunda executada. Itens rastreados: " .. self.Tracking.itemCount)
-            self.Tracking.itemCount = 0
-        end
-    end
-end
-
 -- ====== FUNÇÕES DE EXPLOIT (COM FALLBACKS) ======
 function ApexScript:GetExploitFunctions()
     local virtUser = nil
     local getGarbageCollector = nil
-    local fireTouchInterest = nil
     
-    -- Tenta carregar VirtualUser
     if typeof(VirtualUser) == "userdata" then
         virtUser = VirtualUser
     elseif game:FindFirstChildOfClass("VirtualUser") then
@@ -183,33 +109,14 @@ function ApexScript:GetExploitFunctions()
         end)
     end
     
-    -- Tenta carregar getgc
     if type(getgc) == "function" then
         getGarbageCollector = getgc
-    end
-    
-    -- Tenta carregar firetouchinterest
-    if type(firetouchinterest) == "function" then
-        fireTouchInterest = firetouchinterest
     end
     
     return {
         VirtualUser = virtUser,
         getgc = getGarbageCollector,
-        fireTouchInterest = fireTouchInterest,
     }
-end
-
-function ApexScript:ClickTarget(part)
-    local screenPos, onScreen = Camera:WorldToScreenPoint(part.Position)
-    if not onScreen then return end
-    
-    local exploit = self:GetExploitFunctions()
-    if exploit.VirtualUser then
-        exploit.VirtualUser:CaptureController()
-        exploit.VirtualUser:Button1Down(Vector2.new(screenPos.X, screenPos.Y), Camera.CFrame)
-        exploit.VirtualUser:Button1Up(Vector2.new(screenPos.X, screenPos.Y), Camera.CFrame)
-    end
 end
 
 -- ====== UI CONSTRUCTION ======
@@ -237,7 +144,6 @@ function ApexScript:BuildUI()
     UIStroke.Color = Color3.fromRGB(0, 255, 120)
     UIStroke.Parent = Main
     
-    -- Título
     local Title = Instance.new("TextLabel")
     Title.Parent = Main
     Title.Size = UDim2.new(0.85, 0, 0, 50)
@@ -248,7 +154,6 @@ function ApexScript:BuildUI()
     Title.TextSize = 18
     Title.BackgroundTransparency = 1
     
-    -- Botão Minimize
     local MinimizeBtn = Instance.new("TextButton")
     MinimizeBtn.Parent = Main
     MinimizeBtn.Size = UDim2.new(0, 40, 0, 40)
@@ -264,7 +169,6 @@ function ApexScript:BuildUI()
     minCorner.CornerRadius = UDim.new(0, 8)
     minCorner.Parent = MinimizeBtn
     
-    -- Conteúdo
     local Content = Instance.new("ScrollingFrame")
     Content.Parent = Main
     Content.Position = UDim2.new(0, 15, 0, 60)
@@ -276,7 +180,6 @@ function ApexScript:BuildUI()
     UIList.Parent = Content
     UIList.Padding = UDim.new(0, 8)
     
-    -- Store UI
     self.UI.Hub = ApexHub
     self.UI.Main = Main
     self.UI.Content = Content
@@ -284,7 +187,6 @@ function ApexScript:BuildUI()
     self.UI.MinimizeBtn = MinimizeBtn
     self.UI.OriginalSize = Main.Size
     
-    -- Minimize toggle
     MinimizeBtn.MouseButton1Click:Connect(function()
         self:ToggleMinimize()
     end)
@@ -329,40 +231,41 @@ end
 
 -- ====== FEATURES ======
 
--- 1. BRING METALS (ORIGINAL - FUNCIONAL)
+-- 1. BRING METALS - COM PHYSICS
 function ApexScript:ToggleBringMetals(btn)
     self.States.bringMetals = not self.States.bringMetals
     btn.Text = self.States.bringMetals and "BRING METALS: ACTIVE" or "BRING METALS: OFF"
     
-    if not self.States.bringMetals then
-        self.Tracking.broughtItems = setmetatable({}, {__mode = "k"})
-        self.Tracking.itemCount = 0
-    end
-    
     if self.States.bringMetals then
         local thread = task.spawn(function()
+            -- Criar set para lookup O(1) - fora do loop
+            local metalSet = {}
+            for _, name in pairs(self.MetaisParaTrazer) do
+                metalSet[name] = true
+            end
+            
             while self.States.bringMetals do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
+                        -- Buscar todos os descendentes
                         for _, v in pairs(workspace:GetDescendants()) do
-                            if (v:IsA("BasePart") or v:IsA("Model")) and not self.Tracking.broughtItems[v] then
-                                local metalValido = false
-                                for _, nomeItem in pairs(self.MetaisParaTrazer) do
-                                    if v.Name == nomeItem then metalValido = true; break end
-                                end
-                                
-                                if metalValido and not v:IsDescendantOf(LP.Character) then
-                                    self.Tracking.broughtItems[v] = true
-                                    self.Tracking.itemCount = self.Tracking.itemCount + 1
-                                    self:MoveObject(v, meuCFrame)
-                                end
+                            -- Verificações rápidas em ordem
+                            if not (v:IsA("BasePart") or v:IsA("Model")) then continue end
+                            if v:IsDescendantOf(LP.Character) then continue end
+                            if not v.Parent then continue end
+                            
+                            -- Verificar nome (lookup O(1) em set)
+                            if metalSet[v.Name] then
+                                self:MoveObject(v, meuCFrame)
+                                -- Ativar physics após trazer
+                                self:EnablePhysics(v)
                             end
                         end
                         
-                        -- Cleanup periódico
-                        self:PeriodicCleanup()
+                        -- Garbage collection periódico (leve)
+                        collectgarbage("step", 1)
                     end
                 end)
                 task.wait(self.Config.bringItemsSpeed)
@@ -372,62 +275,41 @@ function ApexScript:ToggleBringMetals(btn)
     end
 end
 
--- 2. BRING ITEMS (ORIGINAL - FUNCIONAL)
+-- 2. BRING ITEMS - COM PHYSICS
 function ApexScript:ToggleBringItems(btn)
     self.States.bringItems = not self.States.bringItems
     btn.Text = self.States.bringItems and "BRING ITEMS: ACTIVE" or "BRING ITEMS: OFF"
     
-    if not self.States.bringItems then
-        self.Tracking.broughtItems = setmetatable({}, {__mode = "k"})
-        self.Tracking.itemCount = 0
-    end
-    
     if self.States.bringItems then
         local thread = task.spawn(function()
+            -- Criar set para lookup O(1) - fora do loop
+            local itemSet = {}
+            for _, name in pairs(self.ItensParaTrazer) do
+                itemSet[name] = true
+            end
+            
             while self.States.bringItems do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
+                        -- Buscar todos os descendentes
                         for _, v in pairs(workspace:GetDescendants()) do
-                            if (v:IsA("BasePart") or v:IsA("Model")) and not self.Tracking.broughtItems[v] then
-                                local itemValido = false
-                                for _, nomeItem in pairs(self.ItensParaTrazer) do
-                                    if v.Name == nomeItem then
-                                        itemValido = true
-                                        break
-                                    end
-                                end
-                                
-                                if itemValido and not v:IsDescendantOf(LP.Character) then
-                                    self.Tracking.broughtItems[v] = true
-                                    self.Tracking.itemCount = self.Tracking.itemCount + 1
-                                    
-                                    if v:IsA("Model") then
-                                        for _, part in pairs(v:GetDescendants()) do
-                                            if part:IsA("BasePart") then
-                                                part.Anchored = false
-                                                part.CanCollide = true
-                                                part.AssemblyLinearVelocity = Vector3.new(0,0,0)
-                                            end
-                                        end
-                                        if v.PrimaryPart then
-                                            v:SetPrimaryPartCFrame(meuCFrame)
-                                        else
-                                            v:PivotTo(meuCFrame)
-                                        end
-                                    elseif v:IsA("BasePart") then
-                                        v.Anchored = false
-                                        v.CanCollide = true
-                                        v.AssemblyLinearVelocity = Vector3.new(0,0,0)
-                                        v.CFrame = meuCFrame
-                                    end
-                                end
+                            -- Verificações rápidas em ordem
+                            if not (v:IsA("BasePart") or v:IsA("Model")) then continue end
+                            if v:IsDescendantOf(LP.Character) then continue end
+                            if not v.Parent then continue end
+                            
+                            -- Verificar nome (lookup O(1) em set)
+                            if itemSet[v.Name] then
+                                self:MoveObject(v, meuCFrame)
+                                -- Ativar physics após trazer
+                                self:EnablePhysics(v)
                             end
                         end
                         
-                        -- Cleanup periódico
-                        self:PeriodicCleanup()
+                        -- Garbage collection periódico (leve)
+                        collectgarbage("step", 1)
                     end
                 end)
                 task.wait(self.Config.bringItemsSpeed)
@@ -442,8 +324,8 @@ function ApexScript:MoveObject(obj, targetCFrame)
     if obj:IsA("Model") then
         for _, part in pairs(obj:GetDescendants()) do
             if part:IsA("BasePart") then
-                part.Anchored = false
-                part.CanCollide = true
+                part.Anchored = true
+                part.CanCollide = false
                 part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             end
         end
@@ -453,10 +335,27 @@ function ApexScript:MoveObject(obj, targetCFrame)
             obj:PivotTo(targetCFrame)
         end
     elseif obj:IsA("BasePart") then
+        obj.Anchored = true
+        obj.CanCollide = false
+        obj.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        obj.CFrame = targetCFrame
+    end
+end
+
+-- Função para ATIVAR physics (deixar cair)
+function ApexScript:EnablePhysics(obj)
+    if obj:IsA("Model") then
+        for _, part in pairs(obj:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.Anchored = false
+                part.CanCollide = true
+                part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            end
+        end
+    elseif obj:IsA("BasePart") then
         obj.Anchored = false
         obj.CanCollide = true
         obj.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        obj.CFrame = targetCFrame
     end
 end
 
@@ -502,7 +401,6 @@ function ApexScript:ToggleFly(btn)
                 while self.States.fly do
                     self:SafeCall(function()
                         workspace.Gravity = 0
-                        -- Speed hack integrado enquanto voa
                         hum.WalkSpeed = 995
                         
                         if root and hum then
@@ -511,7 +409,7 @@ function ApexScript:ToggleFly(btn)
                                 local flyVelocity = moveDirection * (hum.WalkSpeed * self.FlySpeedMultiplier)
                                 root.AssemblyLinearVelocity = Vector3.new(flyVelocity.X, 0, flyVelocity.Z)
                             else
-                                root.AssemblyLinearVelocity = Vector3.new(0,0,0)
+                                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                             end
                         end
                     end)
@@ -542,63 +440,7 @@ function ApexScript:InitializeInfiniteJump()
     end)
 end
 
--- 6. MULTIPLICADOR DE WOODEN FLOOR (50x) - DETECTOR INTELIGENTE
-function ApexScript:ToggleMultiplyFloors(btn)
-    self.States.multiplyFloors = not self.States.multiplyFloors
-    btn.Text = self.States.multiplyFloors and "MULTIPLY FLOORS: DETECTING..." or "MULTIPLY FLOORS: OFF"
-    
-    if not self.States.multiplyFloors then
-        -- Limpar floors multiplicados se desativar
-        for _, floor in pairs(self.Tracking.multipliedFloors) do
-            if floor and floor.Parent then
-                floor:Destroy()
-            end
-        end
-        self.Tracking.multipliedFloors = {}
-        self.WoodenFloorCache = setmetatable({}, {__mode = "k"})
-        btn.Text = "MULTIPLY FLOORS: OFF"
-    else
-        local thread = task.spawn(function()
-            local foundFloor = false
-            
-            while self.States.multiplyFloors do
-                self:SafeCall(function()
-                    if self:IsValidCharacter(LP.Character) then
-                        local backpack = LP:FindFirstChild("Backpack")
-                        if backpack then
-                            for _, item in pairs(backpack:GetChildren()) do
-                                -- Detectar Wooden Floor por padrão de nome (números:números)
-                                if self:IsWoodenFloor(item) and not self.WoodenFloorCache[item] then
-                                    if not foundFloor then
-                                        print("[Sherlock] ✓ DETECTADO WOODEN FLOOR: " .. item.Name)
-                                        foundFloor = true
-                                        btn.Text = "MULTIPLY FLOORS: ACTIVE"
-                                    end
-                                    
-                                    print("[Sherlock] Multiplicando: " .. item.Name .. " (50x)")
-                                    
-                                    -- Duplicar o wooden floor 50 vezes
-                                    for i = 1, 50 do
-                                        local newFloor = item:Clone()
-                                        newFloor.Parent = backpack
-                                        table.insert(self.Tracking.multipliedFloors, newFloor)
-                                    end
-                                    
-                                    self.WoodenFloorCache[item] = true
-                                    print("[Sherlock] ✓ 50 cópias criadas!")
-                                end
-                            end
-                        end
-                    end
-                end)
-                task.wait(0.5)
-            end
-        end)
-        table.insert(self.Tracking.activeThreads, thread)
-    end
-end
-
--- 7. INSTANT INTERACT
+-- 6. INSTANT INTERACT
 function ApexScript:InstantInteract()
     local exploit = self:GetExploitFunctions()
     if exploit.getgc then
@@ -613,7 +455,7 @@ function ApexScript:InstantInteract()
     return false
 end
 
--- 8. ITEM ESP
+-- 7. ITEM ESP
 function ApexScript:ToggleItemEsp(btn)
     self.States.itemEsp = not self.States.itemEsp
     btn.Text = self.States.itemEsp and "ITEM ESP: ACTIVE" or "ITEM ESP: OFF"
@@ -668,7 +510,7 @@ function ApexScript:ToggleItemEsp(btn)
     end
 end
 
--- 9. PLAYER ESP
+-- 8. PLAYER ESP
 function ApexScript:TogglePlayerEsp(btn)
     self.States.playerEsp = not self.States.playerEsp
     btn.Text = self.States.playerEsp and "PLAYER ESP: ACTIVE" or "PLAYER ESP: OFF"
@@ -692,13 +534,11 @@ function ApexScript:TogglePlayerEsp(btn)
                         if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
                             local char = p.Character
                             
-                            -- Highlight
                             local hl = char:FindFirstChild("PlayerHighlight") or Instance.new("Highlight", char)
                             hl.Name = "PlayerHighlight"
                             hl.FillColor = Color3.new(0.5, 0, 1)
                             hl.OutlineColor = Color3.new(1, 1, 1)
                             
-                            -- Label
                             if not char.HumanoidRootPart:FindFirstChild("PlayerLabel") then
                                 local b = Instance.new("BillboardGui", char.HumanoidRootPart)
                                 b.Name = "PlayerLabel"
@@ -741,30 +581,24 @@ end
 
 -- ====== CLEANUP ======
 function ApexScript:Cleanup()
-    -- Desativar todos os states
     self.States.bringMetals = false
     self.States.bringItems = false
     self.States.speedHack = false
     self.States.fly = false
     self.States.itemEsp = false
     self.States.playerEsp = false
-    self.States.multiplyFloors = false
     
-    -- Parar threads ativas
     for _, thread in pairs(self.Tracking.activeThreads) do
         task.cancel(thread)
     end
     self.Tracking.activeThreads = {}
     
-    -- Restaurar gravidade
     workspace.Gravity = self.OriginalGravity
     
-    -- Restaurar velocidade
     if self:IsValidCharacter(LP.Character) then
         LP.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = 16
     end
     
-    -- Limpar ESP
     for _, label in pairs(self.Tracking.espLabels) do
         if label and label.Parent then
             label:Destroy()
@@ -788,13 +622,11 @@ function ApexScript:Initialize()
     
     local contentFrame = self:BuildUI()
     
-    -- Botões
     self:MakeButton("BRING METALS: OFF", function(btn) self:ToggleBringMetals(btn) end)
     self:MakeButton("BRING ITEMS: OFF", function(btn) self:ToggleBringItems(btn) end)
     self:MakeButton("SPEED HACK: OFF", function(btn) self:ToggleSpeedHack(btn) end)
     self:MakeButton("VOAR: OFF", function(btn) self:ToggleFly(btn) end)
     self:MakeButton("INF JUMP: OFF", function(btn) self:ToggleInfiniteJump(btn) end)
-    self:MakeButton("MULTIPLY FLOORS: OFF", function(btn) self:ToggleMultiplyFloors(btn) end)
     
     self:MakeButton("INSTANT INTERACT", function(btn)
         if self:InstantInteract() then
@@ -812,11 +644,10 @@ function ApexScript:Initialize()
     self:MakeButton("PLAYER ESP: OFF", function(btn) self:TogglePlayerEsp(btn) end)
     self:MakeButton("EXIT", function() self:Cleanup(); self.UI.Hub:Destroy() end)
     
-    -- Inicializar infinite jump listener
     self:InitializeInfiniteJump()
     
-    print("[Sherlock Apex] Inicializado com sucesso!")
-    print("[Sherlock Apex] Sistema: Detector Inteligente de Wooden Floor (padrão: digitos:digitos)")
+    print("[Sherlock Apex] ✓ Carregado com sucesso!")
+    print("[Sherlock Apex] ✓ BRING: Itens trazidos com PHYSICS ativada (caem naturalmente)")
 end
 
 -- ====== EXECUÇÃO ======
