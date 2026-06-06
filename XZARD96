@@ -17,6 +17,9 @@
     ✓ Botão fechar removido (EXIT já existe)
     ✓ Kill Aura removida (sistema de saúde personalizado)
     ✓ FLY renomeado para VOAR com Speed Hack integrado
+    ✓ BRING com alcance de 2km
+    ✓ Multiplicador de Wooden Floor (50x)
+    ✓ FIX: Problema de rastreamento de itens otimizado
 ]]
 
 -- ====== SERVIÇOS E VARIÁVEIS GLOBAIS ======
@@ -34,9 +37,11 @@ function ApexScript.new()
     
     -- Configurações
     self.Config = {
-        bringItemsSpeed = 1.5,
+        bringItemsSpeed = 0.5, -- Reduzido para maior velocidade de processamento
         espUpdateSpeed = 2,
         playerEspUpdateSpeed = 0.1,
+        bringRange = 2000, -- Alcance de 2km para bring
+        maxTrackedItems = 500, -- Limite máximo de itens rastreados
     }
     
     -- Estados
@@ -49,15 +54,17 @@ function ApexScript.new()
         infJump = false,
         itemEsp = false,
         playerEsp = false,
+        multiplyFloors = false,
     }
     
-    -- Rastreamento de objetos
+    -- Rastreamento de objetos (OTIMIZADO)
     self.Tracking = {
-        broughtItems = {}, -- {object = CFrame}
-        espLabels = {}, -- {object = BillboardGui}
-        playerHighlights = {}, -- {player = Highlight}
-        playerLabels = {}, -- {player = BillboardGui}
-        activeThreads = {}, -- Threads ativas
+        broughtItems = setmetatable({}, {__mode = "k"}), -- Weak reference para auto-cleanup
+        espLabels = setmetatable({}, {__mode = "k"}),
+        playerHighlights = setmetatable({}, {__mode = "k"}),
+        playerLabels = setmetatable({}, {__mode = "k"}),
+        activeThreads = {},
+        multipliedFloors = {},
     }
     
     -- Dados salvos
@@ -73,6 +80,11 @@ function ApexScript.new()
     -- UI
     self.UI = {}
     self.MinimizedState = false
+    
+    -- Cache de itens próximos (para otimizar busca)
+    self.NearbyItemsCache = {}
+    self.LastCacheTime = 0
+    self.CacheDuration = 0.3 -- Atualizar cache a cada 0.3 segundos
     
     return self
 end
@@ -102,22 +114,58 @@ function ApexScript:GetPlayerFromCharacter(character)
     end) or Players:GetPlayerFromCharacter(character)
 end
 
-function ApexScript:CleanupDestroyedItems()
-    for item, _ in pairs(self.Tracking.broughtItems) do
-        if not item.Parent then
-            self.Tracking.broughtItems[item] = nil
+-- Função otimizada para obter itens próximos (cache)
+function ApexScript:GetNearbyItems(playerPos, itemNames, maxDistance)
+    local now = tick()
+    
+    -- Usar cache se ainda válido
+    if now - self.LastCacheTime < self.CacheDuration and #self.NearbyItemsCache > 0 then
+        return self.NearbyItemsCache
+    end
+    
+    local nearbyItems = {}
+    local itemNameSet = {}
+    
+    -- Converter lista em set para busca O(1)
+    for _, name in pairs(itemNames) do
+        itemNameSet[name] = true
+    end
+    
+    -- Buscar apenas em workspace direto (mais rápido)
+    for _, v in pairs(workspace:GetDescendants()) do
+        if (v:IsA("BasePart") or v:IsA("Model")) and v.Parent and not v:IsDescendantOf(LP.Character) then
+            -- Verificar nome rapidamente
+            if itemNameSet[v.Name] then
+                local vPos = v:IsA("BasePart") and v.Position or (v.PrimaryPart and v.PrimaryPart.Position or nil)
+                if vPos then
+                    local dist = (playerPos - vPos).Magnitude
+                    if dist <= maxDistance then
+                        table.insert(nearbyItems, v)
+                    end
+                end
+            end
         end
     end
+    
+    self.NearbyItemsCache = nearbyItems
+    self.LastCacheTime = now
+    
+    return nearbyItems
 end
 
-function ApexScript:CleanupDestroyedEspLabels()
-    for item, label in pairs(self.Tracking.espLabels) do
-        if not item.Parent or not label.Parent then
-            if label and label.Parent then
-                label:Destroy()
-            end
-            self.Tracking.espLabels[item] = nil
+function ApexScript:ClearTracking()
+    -- Forçar limpeza de weak references
+    local count = 0
+    for k in pairs(self.Tracking.broughtItems) do
+        if not k.Parent then
+            self.Tracking.broughtItems[k] = nil
+            count = count + 1
         end
+    end
+    
+    -- Se muitos itens foram removidos, considera limpeza bem-sucedida
+    if count > 10 then
+        collectgarbage("collect")
     end
 end
 
@@ -284,31 +332,35 @@ end
 
 -- ====== FEATURES ======
 
--- 1. BRING METALS
+-- 1. BRING METALS (2km alcance) - OTIMIZADO
 function ApexScript:ToggleBringMetals(btn)
     self.States.bringMetals = not self.States.bringMetals
-    btn.Text = self.States.bringMetals and "BRING METALS: ACTIVE" or "BRING METALS: OFF"
+    btn.Text = self.States.bringMetals and "BRING METALS: ACTIVE (2km)" or "BRING METALS: OFF"
     
     if not self.States.bringMetals then
-        self.Tracking.broughtItems = {}
+        self.Tracking.broughtItems = setmetatable({}, {__mode = "k"})
+        self.NearbyItemsCache = {}
     else
         local thread = task.spawn(function()
             while self.States.bringMetals do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
-                        self:CleanupDestroyedItems()
+                        local playerPos = LP.Character.HumanoidRootPart.Position
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
-                        for _, v in pairs(workspace:GetDescendants()) do
-                            if (v:IsA("BasePart") or v:IsA("Model")) and not self.Tracking.broughtItems[v] and not v:IsDescendantOf(LP.Character) then
-                                for _, metalName in pairs(self.MetaisParaTrazer) do
-                                    if v.Name == metalName then
-                                        self.Tracking.broughtItems[v] = meuCFrame
-                                        self:MoveObject(v, meuCFrame)
-                                        break
-                                    end
-                                end
+                        -- Usar cache otimizado
+                        local nearbyMetals = self:GetNearbyItems(playerPos, self.MetaisParaTrazer, self.Config.bringRange)
+                        
+                        for _, v in pairs(nearbyMetals) do
+                            if v.Parent and not self.Tracking.broughtItems[v] then
+                                self.Tracking.broughtItems[v] = true
+                                self:MoveObject(v, meuCFrame)
                             end
+                        end
+                        
+                        -- Cleanup periódico
+                        if math.random() < 0.1 then
+                            self:ClearTracking()
                         end
                     end
                 end)
@@ -319,31 +371,35 @@ function ApexScript:ToggleBringMetals(btn)
     end
 end
 
--- 2. BRING ITEMS
+-- 2. BRING ITEMS (2km alcance) - OTIMIZADO
 function ApexScript:ToggleBringItems(btn)
     self.States.bringItems = not self.States.bringItems
-    btn.Text = self.States.bringItems and "BRING ITEMS: ACTIVE" or "BRING ITEMS: OFF"
+    btn.Text = self.States.bringItems and "BRING ITEMS: ACTIVE (2km)" or "BRING ITEMS: OFF"
     
     if not self.States.bringItems then
-        self.Tracking.broughtItems = {}
+        self.Tracking.broughtItems = setmetatable({}, {__mode = "k"})
+        self.NearbyItemsCache = {}
     else
         local thread = task.spawn(function()
             while self.States.bringItems do
                 self:SafeCall(function()
                     if self:IsValidCharacter(LP.Character) then
-                        self:CleanupDestroyedItems()
+                        local playerPos = LP.Character.HumanoidRootPart.Position
                         local meuCFrame = LP.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, -8)
                         
-                        for _, v in pairs(workspace:GetDescendants()) do
-                            if (v:IsA("BasePart") or v:IsA("Model")) and not self.Tracking.broughtItems[v] and not v:IsDescendantOf(LP.Character) then
-                                for _, itemName in pairs(self.ItensParaTrazer) do
-                                    if v.Name == itemName then
-                                        self.Tracking.broughtItems[v] = meuCFrame
-                                        self:MoveObject(v, meuCFrame)
-                                        break
-                                    end
-                                end
+                        -- Usar cache otimizado
+                        local nearbyItems = self:GetNearbyItems(playerPos, self.ItensParaTrazer, self.Config.bringRange)
+                        
+                        for _, v in pairs(nearbyItems) do
+                            if v.Parent and not self.Tracking.broughtItems[v] then
+                                self.Tracking.broughtItems[v] = true
+                                self:MoveObject(v, meuCFrame)
                             end
+                        end
+                        
+                        -- Cleanup periódico
+                        if math.random() < 0.1 then
+                            self:ClearTracking()
                         end
                     end
                 end)
@@ -459,7 +515,48 @@ function ApexScript:InitializeInfiniteJump()
     end)
 end
 
--- 6. INSTANT INTERACT
+-- 6. MULTIPLICADOR DE WOODEN FLOOR (50x)
+function ApexScript:ToggleMultiplyFloors(btn)
+    self.States.multiplyFloors = not self.States.multiplyFloors
+    btn.Text = self.States.multiplyFloors and "MULTIPLY FLOORS: ACTIVE" or "MULTIPLY FLOORS: OFF"
+    
+    if not self.States.multiplyFloors then
+        -- Limpar floors multiplicados se desativar
+        for _, floor in pairs(self.Tracking.multipliedFloors) do
+            if floor and floor.Parent then
+                floor:Destroy()
+            end
+        end
+        self.Tracking.multipliedFloors = {}
+    else
+        local thread = task.spawn(function()
+            while self.States.multiplyFloors do
+                self:SafeCall(function()
+                    if self:IsValidCharacter(LP.Character) then
+                        local backpack = LP:FindFirstChild("Backpack")
+                        if backpack then
+                            for _, item in pairs(backpack:GetChildren()) do
+                                if item.Name == "WoodenFloor" and not self.Tracking.multipliedFloors[item] then
+                                    -- Duplicar o wooden floor 50 vezes
+                                    for i = 1, 50 do
+                                        local newFloor = item:Clone()
+                                        newFloor.Parent = backpack
+                                        table.insert(self.Tracking.multipliedFloors, newFloor)
+                                    end
+                                    self.Tracking.multipliedFloors[item] = true
+                                end
+                            end
+                        end
+                    end
+                end)
+                task.wait(1)
+            end
+        end)
+        table.insert(self.Tracking.activeThreads, thread)
+    end
+end
+
+-- 7. INSTANT INTERACT
 function ApexScript:InstantInteract()
     local exploit = self:GetExploitFunctions()
     if exploit.getgc then
@@ -474,7 +571,7 @@ function ApexScript:InstantInteract()
     return false
 end
 
--- 7. ITEM ESP
+-- 8. ITEM ESP
 function ApexScript:ToggleItemEsp(btn)
     self.States.itemEsp = not self.States.itemEsp
     btn.Text = self.States.itemEsp and "ITEM ESP: ACTIVE" or "ITEM ESP: OFF"
@@ -485,13 +582,11 @@ function ApexScript:ToggleItemEsp(btn)
                 label:Destroy()
             end
         end
-        self.Tracking.espLabels = {}
+        self.Tracking.espLabels = setmetatable({}, {__mode = "k"})
     else
         local thread = task.spawn(function()
             while self.States.itemEsp do
                 self:SafeCall(function()
-                    self:CleanupDestroyedEspLabels()
-                    
                     for _, v in pairs(workspace:GetDescendants()) do
                         if (v:IsA("BasePart") or v:IsA("Model")) and v.Parent then
                             local nameLower = v.Name:lower()
@@ -531,7 +626,7 @@ function ApexScript:ToggleItemEsp(btn)
     end
 end
 
--- 8. PLAYER ESP
+-- 9. PLAYER ESP
 function ApexScript:TogglePlayerEsp(btn)
     self.States.playerEsp = not self.States.playerEsp
     btn.Text = self.States.playerEsp and "PLAYER ESP: ACTIVE" or "PLAYER ESP: OFF"
@@ -545,8 +640,8 @@ function ApexScript:TogglePlayerEsp(btn)
                 self.Tracking.playerLabels[p]:Destroy()
             end
         end
-        self.Tracking.playerHighlights = {}
-        self.Tracking.playerLabels = {}
+        self.Tracking.playerHighlights = setmetatable({}, {__mode = "k"})
+        self.Tracking.playerLabels = setmetatable({}, {__mode = "k"})
     else
         local thread = task.spawn(function()
             while self.States.playerEsp do
@@ -611,6 +706,7 @@ function ApexScript:Cleanup()
     self.States.fly = false
     self.States.itemEsp = false
     self.States.playerEsp = false
+    self.States.multiplyFloors = false
     
     -- Parar threads ativas
     for _, thread in pairs(self.Tracking.activeThreads) do
@@ -639,9 +735,9 @@ function ApexScript:Cleanup()
         end
     end
     
-    self.Tracking.espLabels = {}
-    self.Tracking.playerHighlights = {}
-    self.Tracking.playerLabels = {}
+    self.Tracking.espLabels = setmetatable({}, {__mode = "k"})
+    self.Tracking.playerHighlights = setmetatable({}, {__mode = "k"})
+    self.Tracking.playerLabels = setmetatable({}, {__mode = "k"})
 end
 
 -- ====== INICIALIZAÇÃO ======
@@ -656,6 +752,7 @@ function ApexScript:Initialize()
     self:MakeButton("SPEED HACK: OFF", function(btn) self:ToggleSpeedHack(btn) end)
     self:MakeButton("VOAR: OFF", function(btn) self:ToggleFly(btn) end)
     self:MakeButton("INF JUMP: OFF", function(btn) self:ToggleInfiniteJump(btn) end)
+    self:MakeButton("MULTIPLY FLOORS: OFF", function(btn) self:ToggleMultiplyFloors(btn) end)
     
     self:MakeButton("INSTANT INTERACT", function(btn)
         if self:InstantInteract() then
@@ -677,6 +774,7 @@ function ApexScript:Initialize()
     self:InitializeInfiniteJump()
     
     print("[Sherlock Apex] Inicializado com sucesso!")
+    print("[Sherlock Apex] Alcance de BRING: 2km | Multiplicador de Floors: 50x")
 end
 
 -- ====== EXECUÇÃO ======
