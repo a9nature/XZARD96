@@ -1,328 +1,50 @@
-local _a = "https://api.luarmor.net/files/v4/loaders/"
-local _c = "5e4960200a4d73c67d6b5d70bf1a5534"
-local _i = "f564067d0a5a966c24d34dfd8c5b9744"
-local _j = "2b614469a5636dd995969fcb201708c3"
-local _e = ".lua"
-local _f = "Mr Pig Script Free"
-local _disc = "https://discord.gg/rVzdhPzwkw"
-local _t = {}
-local _g = function(x) return _a .. x .. _e end
-_t.dp = _g(_i)
-_t.pk = _g(_j)
-_t.l  = _g(_c)
-_t.n  = _f
-_t.d  = _disc
+-- Exemplo conceitual de automação local (sem travas ou chaves)
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 
-local _lang = "en"
-pcall(function()
-    local ls = game:GetService("LocalizationService")
-    local code = ls.RobloxLocaleId or ls.SystemLocaleId or "en-us"
-    code = string.lower(tostring(code))
-    _lang = string.sub(code, 1, 2)
-end)
+-- Configuração da automação
+local running = true
 
-local _i18n = {
-    en = {
-        which_game="Which game are you playing?",
-        savannah_btn="🦁  SAVANNAH LIFE / JUNGLE LIFE AUTO FARM",
-        dino_btn="🦖  DINO LIFE AUTO FARM",
-        kill_btn="Mr Pig Kill",
-        loading_pre="Loading version...",
-        load_fail="Failed to load. Try rejoining.",
-    },
-    es = {
-        which_game="¿A qué juego estás jugando?",
-        savannah_btn="🦁  SAVANNAH LIFE / JUNGLE LIFE AUTO FARM",
-        dino_btn="🦖  DINO LIFE AUTO FARM",
-        kill_btn="Mr Pig Kill",
-        loading_pre="Cargando versión...",
-        load_fail="Error al cargar. Vuelve a unirte.",
-    },
-    pt = {
-        which_game="Qual jogo você está jogando?",
-        savannah_btn="🦁  SAVANNAH LIFE / JUNGLE LIFE AUTO FARM",
-        dino_btn="🦖  DINO LIFE AUTO FARM",
-        kill_btn="Mr Pig Kill",
-        loading_pre="Carregando versão...",
-        load_fail="Falha ao carregar. Tente entrar novamente.",
-    }
-}
-
-if not _i18n[_lang] then _lang = "en" end
-local function t(key)
-    return (_i18n[_lang] and _i18n[_lang][key]) or _i18n.en[key] or key
-end
-
-if not hookmetamethod then
-    local env = (getgenv and getgenv()) or _G
-    if hookfunction and getrawmetatable then
-        env.hookmetamethod = function(object, method, hook)
-            local mt = getrawmetatable(object)
-            if setreadonly then pcall(setreadonly, mt, false) end
-            local original = mt[method]
-            local restore = hookfunction(original, hook)
-            if setreadonly then pcall(setreadonly, mt, true) end
-            return restore
-        end
-    else
-        env.hookmetamethod = function(object, method, hook)
-            warn("[Compat] hookmetamethod unavailable - substate blocking disabled")
-            local mt = getrawmetatable and getrawmetatable(object)
-            return (mt and mt[method]) or function() end
+-- Função simulada para encontrar o alvo mais próximo (pode ser uma planta, minério ou NPC)
+local function encontrarAlvoProximo()
+    local workspace = game:GetService("Workspace")
+    -- Procurando na pasta fictícia de recursos do jogo
+    local recursos = workspace:FindFirstChild("Recursos") or workspace
+    
+    for _, objeto in ipairs(recursos:GetChildren()) do
+        -- Exemplo: Procura por algo chamado "Alvo" que tenha uma parte física (PrimaryPart ou Part)
+        if objeto.Name == "Alvo" and objeto:IsA("Model") and objeto.PrimaryPart then
+            return objeto.PrimaryPart
         end
     end
-    hookmetamethod = env.hookmetamethod
+    return nil
 end
 
-local _h = false
+-- Loop principal da automação
 task.spawn(function()
-    pcall(function()
-        loadstring(game:HttpGet(_t.l))()
-    end)
-    _h = true
-end)
-
-local function log(eventName, color, extraFields)
-    task.spawn(function()
-        local deadline = tick() + 4
-        while not getgenv().MrPigLogReady and tick() < deadline do
-            task.wait(0.1)
+    while running do
+        task.wait(1) -- Evita travar o jogo
+        
+        local personagem = LocalPlayer.Character
+        local humanoid = personagem and personagem:FindFirstChildOfClass("Humanoid")
+        local rootPart = personagem and personagem:FindFirstChild("HumanoidRootPart")
+        
+        if humanoid and rootPart and humanoid.Health > 0 then
+            local alvo = encontrarAlvoProximo()
+            
+            if alvo then
+                print("Alvo encontrado! Movendo até a posição...")
+                -- Move o personagem nativamente até a coordenada do alvo
+                humanoid:MoveTo(alvo.Position)
+                
+                -- Aguarda até o personagem chegar ou o alvo sumir
+                humanoid.MoveToFinished:Wait()
+            else
+                print("Nenhum alvo disponível no momento. Procurando...")
+            end
         end
-        local fn = getgenv().MrPigLog
-        if type(fn) == "function" then
-            pcall(fn, eventName, color, extraFields)
-        end
-    end)
-end
-
-log("Wrapper Opened", 16776960, {
-    { name = "Wrapper",  value = "`" .. _t.n .. "`",                                               inline = true },
-    { name = "Language", value = "`" .. _lang .. "`",                                              inline = true },
-    { name = "Executor", value = "`" .. (identifyexecutor and identifyexecutor() or "unknown") .. "`", inline = true },
-})
-
-local existing = game:GetService("CoreGui"):FindFirstChild("MrPigPickerGui")
-if existing then existing:Destroy() end
-
-local TweenService     = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "MrPigPickerGui"
-gui.ResetOnSpawn = false
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.IgnoreGuiInset = true
-pcall(function() gui.Parent = game:GetService("CoreGui") end)
-if not gui.Parent then gui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui") end
-
-local dim = Instance.new("Frame")
-dim.Size = UDim2.fromScale(1, 1)
-dim.BackgroundColor3 = Color3.new(0, 0, 0)
-dim.BackgroundTransparency = 0.4
-dim.BorderSizePixel = 0
-dim.Parent = gui
-
-local card = Instance.new("Frame")
-card.Size = UDim2.fromOffset(640, 340)
-card.Position = UDim2.new(0.5, -320, 0.5, -170)
-card.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-card.BorderSizePixel = 0
-card.Parent = gui
-Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
-
-local stroke = Instance.new("UIStroke", card)
-stroke.Color = Color3.fromRGB(60, 60, 80)
-stroke.Thickness = 1
-stroke.Transparency = 0.3
-
-local shadow = Instance.new("Frame")
-shadow.Size = UDim2.fromOffset(650, 350)
-shadow.Position = UDim2.new(0.5, -325, 0.5, -173)
-shadow.BackgroundColor3 = Color3.new(0, 0, 0)
-shadow.BackgroundTransparency = 0.6
-shadow.BorderSizePixel = 0
-shadow.ZIndex = card.ZIndex - 1
-shadow.Parent = gui
-Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 12)
-
-local titleBar = Instance.new("Frame")
-titleBar.Size = UDim2.new(1, 0, 0, 40)
-titleBar.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
-titleBar.BorderSizePixel = 0
-titleBar.Parent = card
-Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 10)
-
-local titleCover = Instance.new("Frame")
-titleCover.Size = UDim2.new(1, 0, 0.5, 0)
-titleCover.Position = UDim2.new(0, 0, 0.5, 0)
-titleCover.BackgroundColor3 = titleBar.BackgroundColor3
-titleCover.BorderSizePixel = 0
-titleCover.Parent = titleBar
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -20, 1, 0)
-title.Position = UDim2.fromOffset(15, 0)
-title.BackgroundTransparency = 1
-title.Text = "🐷  " .. _t.n
-title.TextColor3 = Color3.fromRGB(235, 235, 245)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 13
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.Parent = titleBar
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.fromOffset(28, 28)
-closeBtn.Position = UDim2.new(1, -34, 0, 6)
-closeBtn.BackgroundColor3 = Color3.fromRGB(220, 70, 70)
-closeBtn.BorderSizePixel = 0
-closeBtn.Text = "✕"
-closeBtn.TextColor3 = Color3.new(1, 1, 1)
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 14
-closeBtn.AutoButtonColor = false
-closeBtn.Parent = titleBar
-Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
-
-local function hover(btn, normal, hovered)
-    btn.MouseEnter:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = hovered}):Play()
-    end)
-    btn.MouseLeave:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = normal}):Play()
-    end)
-end
-hover(closeBtn, Color3.fromRGB(220, 70, 70), Color3.fromRGB(240, 90, 90))
-
-closeBtn.MouseButton1Click:Connect(function()
-    gui:Destroy()
-    if shadow and shadow.Parent then shadow:Destroy() end
-end)
-
-do
-    local dragging, dragStart, startPos = false, nil, nil
-    titleBar.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = i.Position
-            startPos = card.Position
-            shadow.Position = UDim2.new(card.Position.X.Scale, card.Position.X.Offset - 5, card.Position.Y.Scale, card.Position.Y.Offset - 3)
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - dragStart
-            card.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-            shadow.Position = UDim2.new(card.Position.X.Scale, card.Position.X.Offset - 5, card.Position.Y.Scale, card.Position.Y.Offset - 3)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-end
-
-local gameFrame = Instance.new("Frame")
-gameFrame.Size = UDim2.new(1, 0, 1, -40)
-gameFrame.Position = UDim2.fromOffset(0, 40)
-gameFrame.BackgroundTransparency = 1
-gameFrame.Parent = card
-
-local gameSubtitle = Instance.new("TextLabel")
-gameSubtitle.Size = UDim2.new(1, -30, 0, 20)
-gameSubtitle.Position = UDim2.fromOffset(15, 10)
-gameSubtitle.BackgroundTransparency = 1
-gameSubtitle.Text = t("which_game")
-gameSubtitle.TextColor3 = Color3.fromRGB(200, 200, 215)
-gameSubtitle.Font = Enum.Font.Gotham
-gameSubtitle.TextSize = 12
-gameSubtitle.TextXAlignment = Enum.TextXAlignment.Left
-gameSubtitle.Parent = gameFrame
-
-local gameStatus = Instance.new("TextLabel")
-gameStatus.Size = UDim2.new(1, -30, 0, 30)
-gameStatus.Position = UDim2.fromOffset(15, 280)
-gameStatus.BackgroundTransparency = 1
-gameStatus.Text = ""
-gameStatus.TextColor3 = Color3.fromRGB(200, 200, 215)
-gameStatus.Font = Enum.Font.Gotham
-gameStatus.TextSize = 11
-gameStatus.TextXAlignment = Enum.TextXAlignment.Center
-gameStatus.TextWrapped = true
-gameStatus.Parent = gameFrame
-
--- Função interna para carregar os scripts sem passar por telas de pagamento/key
-local function loadScript(url)
-    gameStatus.Text = t("loading_pre")
-    gameStatus.TextColor3 = Color3.fromRGB(100, 200, 255)
-    
-    local success, err = pcall(function()
-        loadstring(game:HttpGet(url))()
-    end)
-    
-    if success then
-        gui:Destroy()
-        if shadow and shadow.Parent then shadow:Destroy() end
-    else
-        gameStatus.Text = t("load_fail")
-        gameStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
-        warn("Error loading script: " .. tostring(err))
     end
-end
-
--- Botão Savannah (Restaurado e Limpo das travas de compra)
-local savannahBtn = Instance.new("TextButton")
-savannahBtn.Size = UDim2.new(1, -30, 0, 70)
-savannahBtn.Position = UDim2.fromOffset(15, 40)
-savannahBtn.BackgroundColor3 = Color3.fromRGB(120, 90, 40)
-savannahBtn.BorderSizePixel = 0
-savannahBtn.Text = t("savannah_btn")
-savannahBtn.TextColor3 = Color3.fromRGB(245, 240, 230)
-savannahBtn.Font = Enum.Font.GothamBold
-savannahBtn.TextSize = 14
-savannahBtn.AutoButtonColor = false
-savannahBtn.Parent = gameFrame
-hover(savannahBtn, Color3.fromRGB(120, 90, 40), Color3.fromRGB(140, 105, 50))
-Instance.new("UICorner", savannahBtn).CornerRadius = UDim.new(0, 8)
-
-savannahBtn.MouseButton1Click:Connect(function()
-    loadScript(_t.dp)
 end)
 
--- Botão Dino Life
-local dinoBtn = Instance.new("TextButton")
-dinoBtn.Size = UDim2.new(1, -30, 0, 70)
-dinoBtn.Position = UDim2.fromOffset(15, 120)
-dinoBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 90)
-dinoBtn.BorderSizePixel = 0
-dinoBtn.Text = t("dino_btn")
-dinoBtn.TextColor3 = Color3.fromRGB(245, 250, 240)
-dinoBtn.Font = Enum.Font.GothamBold
-dinoBtn.TextSize = 15
-dinoBtn.AutoButtonColor = false
-dinoBtn.Parent = gameFrame
-Instance.new("UICorner", dinoBtn).CornerRadius = UDim.new(0, 8)
-hover(dinoBtn, Color3.fromRGB(100, 150, 90), Color3.fromRGB(125, 180, 110))
-
-dinoBtn.MouseButton1Click:Connect(function()
-    loadScript(_t.pk)
-end)
-
--- Botão Mr Pig Kill
-local killBtn = Instance.new("TextButton")
-killBtn.Size = UDim2.new(1, -30, 0, 70)
-killBtn.Position = UDim2.fromOffset(15, 200)
-killBtn.BackgroundColor3 = Color3.fromRGB(150, 70, 95)
-killBtn.BorderSizePixel = 0
-killBtn.Text = t("kill_btn")
-killBtn.TextColor3 = Color3.fromRGB(255, 245, 250)
-killBtn.Font = Enum.Font.GothamBold
-killBtn.TextSize = 16
-killBtn.AutoButtonColor = false
-killBtn.Parent = gameFrame
-Instance.new("UICorner", killBtn).CornerRadius = UDim.new(0, 8)
-hover(killBtn, Color3.fromRGB(150, 70, 95), Color3.fromRGB(185, 85, 120))
-
-killBtn.MouseButton1Click:Connect(function()
-    loadScript(_t.l)
-end)
+-- Código para parar o script se necessário
+-- running = false
